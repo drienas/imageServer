@@ -101,16 +101,20 @@ app.get('/api/v1/images/raw/:vin/:positionIdentifier', async (req, res) => {
   }
 });
 
-app.listen(port, async () => {
-  console.log(`App listening on port ${port}`);
-  console.log(`Connecting to MongoDB @ ${mongoUrl}`);
-  const db = await mongoose.connect(mongoUrl, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-    useCreateIndex: true,
+console.log(`Connecting to MongoDB @ ${mongoUrl}`);
+mongoose.connect(mongoUrl, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+  useCreateIndex: true,
+});
+
+mongoose.connection.on('connected', (err) => {
+  console.log(`Connceted to MongoDB`);
+  app.listen(port, async () => {
+    console.log(`App listening on port ${port}`);
+    Image = mongoose.model('Image', imageSchema);
+    Car = mongoose.model('Car', carSchema);
   });
-  Image = mongoose.model('Image', imageSchema);
-  Car = mongoose.model('Car', carSchema);
 });
 
 mongoose.connection.on('error', (err) => {
