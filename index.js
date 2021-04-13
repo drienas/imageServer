@@ -31,6 +31,8 @@ const app = express();
 
 app.use(cors());
 
+app.get('/', (req, res) => res.status(200).send());
+
 app.get('/api/v1/images/status/:vin', async (req, res) => {
   try {
     let vin = req.params.vin;
