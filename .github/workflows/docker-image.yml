@@ -14,5 +14,15 @@ jobs:
     - uses: actions/checkout@v2
     - name: Build the Docker image
       run: docker build . --file Dockerfile --tag docker.pkg.github.com/drienas/dsg-imageserver:0.1.0
-    - name: Deplay the Docker image
+      
+      
+  deploy:
+    needs: build
+    
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Log into registry
+      run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login docker.pkg.github.com -u ${{ github.actor }} --password-stdin
+    - name: Deploy the Docker image
       run: docker push docker.pkg.github.com/drienas/dsg-imageserver:0.1.0
