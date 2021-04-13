@@ -1,4 +1,4 @@
-name: Docker Image CI
+name: Docker Release
 
 on:
   push:
@@ -6,23 +6,15 @@ on:
 
 jobs:
 
-  build:
+  publish:
 
     runs-on: ubuntu-latest
 
-    steps:
-    - uses: actions/checkout@v2
-    - name: Build the Docker image
-      run: docker build . --file Dockerfile --tag docker.pkg.github.com/drienas/dsg-imageserver:0.1.0
-      
-      
-  deploy:
-    needs: build
-    
-    runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
     - name: Log into registry
       run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login docker.pkg.github.com -u ${{ github.actor }} --password-stdin
+    - name: Build the Docker image
+      run: docker build . --file Dockerfile --tag docker.pkg.github.com/drienas/dsg-imageserver:0.1.0
     - name: Deploy the Docker image
       run: docker push docker.pkg.github.com/drienas/dsg-imageserver:0.1.0
