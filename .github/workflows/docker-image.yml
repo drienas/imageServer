@@ -24,3 +24,9 @@ jobs:
 
       - name: Deploy the Docker image
         run: docker push docker.pkg.github.com/drienas/imageserver/dsg-imageserver:${{ steps.get_version.outputs.VERSION }}
+
+      - name: Docker tag latest
+        run: docker tag docker.pkg.github.com/drienas/imageserver/dsg-imageserver:${{ steps.get_version.outputs.VERSION }} docker.pkg.github.com/drienas/imageserver/dsg-imageserver
+
+      - name: Docker push latest
+        run: docker push docker.pkg.github.com/drienas/imageserver/dsg-imageserver
