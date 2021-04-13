@@ -103,6 +103,7 @@ app.get('/api/v1/images/raw/:vin/:positionIdentifier', async (req, res) => {
 
 app.listen(port, async () => {
   console.log(`App listening on port ${port}`);
+  console.log(`Connecting to MongoDB @ ${mongoUrl}`);
   const db = await mongoose.connect(mongoUrl, {
     useNewUrlParser: true,
     useUnifiedTopology: true,
