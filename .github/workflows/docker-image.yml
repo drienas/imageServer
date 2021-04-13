@@ -13,6 +13,6 @@ jobs:
       - name: Log into registry
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login docker.pkg.github.com -u ${{ github.actor }} --password-stdin
       - name: Build the Docker image
-        run: docker build . --file Dockerfile --tag docker.pkg.github.com/drienas/imageserver/dsg-imageserver:0.1.1
+        run: docker build . --file Dockerfile --tag docker.pkg.github.com/drienas/imageserver/dsg-imageserver:0.1.3
       - name: Deploy the Docker image
-        run: docker push docker.pkg.github.com/drienas/imageserver/dsg-imageserver:0.1.1
+        run: docker push docker.pkg.github.com/drienas/imageserver/dsg-imageserver:0.1.3
