@@ -13,7 +13,7 @@ jobs:
     steps:
     - uses: actions/checkout@v2
     - name: Build the Docker image
-      run: docker build . --file Dockerfile --tag docker.pkg.github.com/drienas/imageServer:0.1.0
+      run: docker build . --file Dockerfile --tag docker.pkg.github.com/drienas/dsg-imageserver:0.1.0
       
       
   deploy:
@@ -22,5 +22,5 @@ jobs:
     
     steps:
     - name: Deplay the Docker image
-      run: docker push docker.pkg.github.com/drienas/imageServer:0.1.0
+      run: docker push docker.pkg.github.com/drienas/dsg-imageserver:0.1.0
     
