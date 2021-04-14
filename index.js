@@ -7,23 +7,29 @@ const port = process.env.SERVER_PORT || 3333;
 
 const mongoUrl = `mongodb://${mongo}/cardata`;
 
-const imageSchema = new mongoose.Schema({
-  image: {
-    type: Buffer,
-  },
-  tags: [String],
-  positionIdentifier: Number,
-});
-
-const carSchema = new mongoose.Schema({
-  vin: { type: String, index: true },
-  images: [
-    {
-      positionIdentifier: Number,
-      imageId: mongoose.Types.ObjectId,
+const imageSchema = new mongoose.Schema(
+  {
+    image: {
+      type: Buffer,
     },
-  ],
-});
+    tags: [String],
+    positionIdentifier: Number,
+  },
+  { timestamps: true }
+);
+
+const carSchema = new mongoose.Schema(
+  {
+    vin: { type: String, index: true },
+    images: [
+      {
+        positionIdentifier: Number,
+        imageId: mongoose.Types.ObjectId,
+      },
+    ],
+  },
+  { timestamps: true }
+);
 
 let Image, Car;
 
