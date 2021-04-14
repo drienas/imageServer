@@ -109,6 +109,19 @@ app.get('/api/v1/images/raw/:vin/:positionIdentifier', async (req, res) => {
   }
 });
 
+app.get('/api/v1/images/status/changedsince/:seconds', async (req, res) => {
+  try {
+    let sec = req.params.seconds;
+    let timestamp = Date.now() - sec * 1000;
+    let data = await Car.find({ updatedAt: { $gte: timestamp } });
+    data = data.map((x) => x.vin);
+    res.status(200).json({ success: true, data });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, error: err });
+  }
+});
+
 console.log(`Connecting to MongoDB @ ${mongoUrl}`);
 mongoose.connect(mongoUrl, {
   useNewUrlParser: true,
