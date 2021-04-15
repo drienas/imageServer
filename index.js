@@ -67,7 +67,7 @@ app.get('/api/v1/images/status/:vin', async (req, res) => {
         found: true,
         images: carData.images
           .sort((a, b) => a.positionIdentifier - b.positionIdentifier)
-          .map((x) => `/api/v1/images/raw/${vin}/${x.positionIdentifier}`),
+          .map((x) => `/${vin}/${x.positionIdentifier}`),
       });
     }
   } catch (err) {
