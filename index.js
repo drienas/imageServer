@@ -31,6 +31,7 @@ const carSchema = new mongoose.Schema(
         imageId: mongoose.Types.ObjectId,
       },
     ],
+    linked: Boolean,
   },
   { timestamps: true }
 );
@@ -177,6 +178,76 @@ app.get('/api/v1/images/status/changedsince/:seconds', async (req, res) => {
     let data = await Car.find({ updatedAt: { $gte: timestamp } });
     data = data.map((x) => x.vin);
     res.status(200).json({ success: true, data });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, error: err });
+  }
+});
+
+app.get('/api/v1/images/link/:from/:to', async (req, res) => {
+  try {
+    let from = req.params.from;
+    let to = req.params.to;
+    for (let x of [from, to]) {
+      if (!/^\w{17}$/g.test(x)) {
+        res.status(400).json({
+          success: false,
+          found: false,
+          error: `${x} is not a valid VIN.`,
+        });
+        return;
+      }
+    }
+    let carData = await Car.findOne({ vin: from });
+    let carCheck = await Car.findOne({ vin: to });
+    if (carCheck) throw `VIN ${to} already exists in database.`;
+    if (!carData) {
+      res
+        .status(404)
+        .json({ success: false, error: `Car to link from not found.` });
+      return;
+    }
+    let images = carData.images;
+    let vin = to;
+    const query = await new Car({
+      vin,
+      images,
+      linked: true,
+    }).save();
+    res.status(200).json({ success: true, query });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, error: err });
+  }
+});
+
+app.delete('/api/v1/images/link/:vin', async (req, res) => {
+  let vin = req.params.vin;
+  if (!/^\w{17}$/g.test(vin)) {
+    res.status(400).json({
+      success: false,
+      found: false,
+      error: `${vin} is not a valid VIN.`,
+    });
+  }
+  try {
+    let carData = await Car.findOne({ vin });
+    if (!carData) {
+      res
+        .status(404)
+        .json({ success: false, error: `No cardata found for ${vin}` });
+      return;
+    }
+    if (!carData.linked) {
+      res.status(400).json({
+        success: false,
+        error: `${vin} contains original pictures and cannot be deleted.`,
+      });
+      return;
+    }
+    let deletedData = await Car.deleteOne({ _id: carData._id });
+    console.log(deletedData);
+    res.status(200).json({ success: true, deletedData });
   } catch (err) {
     console.error(err);
     res.status(500).json({ success: false, error: err });
