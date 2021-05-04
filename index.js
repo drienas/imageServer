@@ -44,7 +44,7 @@ app.use(cors());
 
 app.get('/', (req, res) => res.status(200).send());
 
-app.get('/api/v1/images/status/:vin', async (req, res) => {
+app.get('/images/v1/status/:vin', async (req, res) => {
   try {
     let vin = req.params.vin;
     if (!/^\w{17}$/g.test(vin)) {
@@ -76,7 +76,7 @@ app.get('/api/v1/images/status/:vin', async (req, res) => {
   }
 });
 
-app.get('/api/v1/images/raw/:vin/:positionIdentifier', async (req, res) => {
+app.get('/images/v1/raw/:vin/:positionIdentifier', async (req, res) => {
   try {
     let vin = req.params.vin;
     let positionIdentifier = req.params.positionIdentifier;
@@ -130,7 +130,7 @@ const brandVIN = async (im, vin) => {
   return imageTmp.getBufferAsync(jimp.MIME_JPEG);
 };
 
-app.get('/api/v1/images/brand/:vin/:positionIdentifier', async (req, res) => {
+app.get('/images/v1/brand/:vin/:positionIdentifier', async (req, res) => {
   try {
     let vin = req.params.vin;
     let positionIdentifier = req.params.positionIdentifier;
@@ -171,7 +171,7 @@ app.get('/api/v1/images/brand/:vin/:positionIdentifier', async (req, res) => {
   }
 });
 
-app.get('/api/v1/images/status/changedsince/:seconds', async (req, res) => {
+app.get('/images/v1/status/changedsince/:seconds', async (req, res) => {
   try {
     let sec = req.params.seconds;
     let timestamp = Date.now() - sec * 1000;
@@ -184,7 +184,7 @@ app.get('/api/v1/images/status/changedsince/:seconds', async (req, res) => {
   }
 });
 
-app.get('/api/v1/images/link/:from/:to', async (req, res) => {
+app.get('/images/v1/link/:from/:to', async (req, res) => {
   try {
     let from = req.params.from;
     let to = req.params.to;
@@ -221,7 +221,7 @@ app.get('/api/v1/images/link/:from/:to', async (req, res) => {
   }
 });
 
-app.delete('/api/v1/images/link/:vin', async (req, res) => {
+app.delete('/images/v1/link/:vin', async (req, res) => {
   let vin = req.params.vin;
   if (!/^\w{17}$/g.test(vin)) {
     res.status(400).json({
