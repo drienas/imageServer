@@ -8,8 +8,15 @@ const port = process.env.SERVER_PORT || 3333;
 
 const mongoUrl = `mongodb://${mongo}/cardata`;
 
-let BRAND,
-  FONT = null;
+let BRAND;
+FONT = null;
+
+let BRANDS = {
+  BRAND: null,
+  BRANDDSG: null,
+  BRANDAPPROVED: null,
+  BRANDBOR: null,
+};
 
 const imageSchema = new mongoose.Schema(
   {
@@ -114,12 +121,12 @@ app.get('/images/v1/raw/:vin/:positionIdentifier', async (req, res) => {
   }
 });
 
-const brandImage = async (im) => {
+const brandImage = async (im, brand = 'BRAND') => {
   let imageTmp = await jimp.read(im);
   imageTmp = await imageTmp.composite(
-    BRAND,
+    BRANDS[brand],
     0,
-    imageTmp.bitmap.height - BRAND.bitmap.height
+    imageTmp.bitmap.height - BRANDS[brand].bitmap.height
   );
   return imageTmp.getBufferAsync(jimp.MIME_JPEG);
 };
@@ -170,6 +177,58 @@ app.get('/images/v1/brand/:vin/:positionIdentifier', async (req, res) => {
     res.json(500).json({ success: false, found: false, error: err });
   }
 });
+
+app.get(
+  '/images/v2/brand/:brandId/:vin/:positionIdentifier',
+  async (req, res) => {
+    try {
+      let vin = req.params.vin;
+      let brandId = req.params.brandId;
+      if (!Object.keys(BRANDS).includes(brandId)) {
+        res.status(400).json({
+          success: false,
+          message: 'Invalid brandId set',
+        });
+        return;
+      }
+      let positionIdentifier = req.params.positionIdentifier;
+      if (!/^\w{17}$/g.test(vin)) {
+        res.status(400).json({
+          success: false,
+          found: false,
+          error: `${vin} is not a valid VIN.`,
+        });
+        return;
+      }
+      let carData = await Car.findOne({ vin });
+      if (!carData) {
+        res.status(404).send();
+        return;
+      } else {
+        let image = carData.images.find(
+          (x) => x.positionIdentifier == positionIdentifier
+        );
+        if (!image) {
+          res.status(404).send();
+          return;
+        }
+        let imageId = image.imageId;
+        image = await Image.findOne({ _id: imageId });
+        if (!image) {
+          res.status(404).send();
+          return;
+        }
+        res.set('Content-Type', 'image/jpeg');
+        let im = image.image;
+        if (positionIdentifier == 1) im = await brandImage(im, brandId);
+
+        res.status(200).send(im);
+      }
+    } catch (err) {
+      res.json(500).json({ success: false, found: false, error: err });
+    }
+  }
+);
 
 app.get('/images/v1/status/changedsince/:seconds', async (req, res) => {
   try {
@@ -265,6 +324,12 @@ mongoose.connection.on('connected', (err) => {
   console.log(`Connceted to MongoDB`);
   app.listen(port, async () => {
     BRAND = await jimp.read(`./LogoBrand.png`);
+    BRANDS = {
+      BRAND: await jimp.read(`./LogoBrand.png`),
+      BRANDDSG: await jimp.read(`./LogoDSG.png`),
+      BRANDAPPROVED: await jimp.read(`./LogoBORApproved.png`),
+      BRANDBOR: await jimp.read(`./LogoBOR.png`),
+    };
     FONT = await jimp.loadFont(jimp.FONT_SANS_32_BLACK);
     console.log(`App listening on port ${port}`);
     Image = mongoose.model('Image', imageSchema);
