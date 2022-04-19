@@ -35,10 +35,3 @@ jobs:
 
       - name: Docker push latest
         run: docker push docker.pkg.github.com/${{ env.OWNER }}/${{ env.REPO }}/${{ env.PACKAGE }}
-
-      - uses: actions/delete-package-versions@v1
-        with:
-          owner: ${{ env.OWNER }}
-          repo: ${{ env.REPO }}
-          package-name: ${{ env.PACKAGE }}
-          token: ${{ secrets.GITHUB_TOKEN }}
