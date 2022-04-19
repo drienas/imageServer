@@ -2,9 +2,29 @@ const express = require('express');
 const mongoose = require('mongoose');
 const jimp = require('jimp');
 const cors = require('cors');
+const { BasicStrategy } = require('passport-http');
+const passport = require('passport');
 
-const mongo = process.env.MONGO_DB || 'jobrouter6:27017';
-const port = process.env.SERVER_PORT || 3333;
+if (process.env.NODE_ENV !== 'production') {
+  require('dotenv').config();
+}
+
+const mongo = process.env.MONGO_DB;
+const port = process.env.SERVER_PORT;
+const AUTHUSER = process.env.AUTHUSER;
+const AUTHPASSWORD = process.env.AUTHPASSWORD;
+
+passport.use(
+  new BasicStrategy((user, pw, done) => {
+    try {
+      if (user !== AUTHUSER) return done(null, false);
+      if (pw !== AUTHPASSWORD) return done(null, false);
+      return done(null, user);
+    } catch (err) {
+      return done(err);
+    }
+  })
+);
 
 const mongoUrl = `mongodb://${mongo}/cardata`;
 
@@ -288,6 +308,7 @@ app.delete('/images/v1/link/:vin', async (req, res) => {
       found: false,
       error: `${vin} is not a valid VIN.`,
     });
+    return;
   }
   try {
     let carData = await Car.findOne({ vin });
@@ -312,6 +333,37 @@ app.delete('/images/v1/link/:vin', async (req, res) => {
     res.status(500).json({ success: false, error: err });
   }
 });
+
+app.delete(
+  '/images/v1/original/:vin',
+  passport.authenticate('basic', { session: false }),
+  async (req, res) => {
+    let vin = req.params.vin;
+    if (!/^\w{17}$/g.test(vin)) {
+      res.status(400).json({
+        success: false,
+        found: false,
+        error: `${vin} is not a valid VIN.`,
+      });
+      return;
+    }
+    try {
+      let carData = await Car.findOne({ vin });
+      if (!carData) {
+        res
+          .status(404)
+          .json({ success: false, error: `No cardata found for ${vin}` });
+        return;
+      }
+      let deletedData = await Car.deleteOne({ _id: carData._id });
+      console.log(deletedData);
+      res.status(200).json({ success: true, deletedData });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ success: false, error: err });
+    }
+  }
+);
 
 console.log(`Connecting to MongoDB @ ${mongoUrl}`);
 mongoose.connect(mongoUrl, {
