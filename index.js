@@ -63,6 +63,21 @@ const carSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+const postProcessImage = (req, img) => {
+  return new Promise(async (resolve, reject) => {
+    let shrink = req.query;
+    if (!shrink.shrink) {
+      resolve(img);
+      return;
+    }
+    shrink = shrink.shrink;
+    let pic = await jimp.read(img);
+    pic = await pic.resize(parseInt(shrink), jimp.AUTO);
+    pic = await pic.getBufferAsync(jimp.MIME_JPEG);
+    resolve(pic);
+  });
+};
+
 let Image, Car;
 
 const app = express();
@@ -134,7 +149,9 @@ app.get('/images/v1/raw/:vin/:positionIdentifier', async (req, res) => {
         return;
       }
       res.set('Content-Type', 'image/jpeg');
-      res.status(200).send(image.image);
+      let i = image.image;
+      i = await postProcessImage(req, i);
+      res.status(200).send(i);
     }
   } catch (err) {
     res.json(500).json({ success: false, found: false, error: err });
