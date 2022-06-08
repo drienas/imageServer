@@ -4,6 +4,7 @@ const jimp = require('jimp');
 const cors = require('cors');
 const { BasicStrategy } = require('passport-http');
 const passport = require('passport');
+const cache = require('memory-cache');
 
 if (process.env.NODE_ENV !== 'production') {
   require('dotenv').config();
@@ -65,16 +66,25 @@ const carSchema = new mongoose.Schema(
 
 const postProcessImage = (req, img) => {
   return new Promise(async (resolve, reject) => {
+    let vin = req.params.vin;
+    let positionIdentifier = req.params.positionIdentifier;
     let shrink = req.query;
     if (!shrink.shrink) {
       resolve(img);
       return;
     }
     shrink = shrink.shrink;
-    let pic = await jimp.read(img);
-    pic = await pic.resize(parseInt(shrink), jimp.AUTO);
-    pic = await pic.getBufferAsync(jimp.MIME_JPEG);
-    resolve(pic);
+    let id = `${vin}/${positionIdentifier}/${shrink}`;
+    let cached = cache.get(id);
+    if (cached) {
+      resolve(cached);
+    } else {
+      let pic = await jimp.read(img);
+      pic = await pic.resize(parseInt(shrink), jimp.AUTO);
+      pic = await pic.getBufferAsync(jimp.MIME_JPEG);
+      resolve(pic);
+      cache.put(id, pic, 30 * 60 * 1000);
+    }
   });
 };
 
