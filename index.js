@@ -267,7 +267,7 @@ app.get(
         }
         res.set('Content-Type', 'image/jpeg');
         let im = image.image;
-        im = await postProcessImage(im);
+        im = await postProcessImage(req, im);
         if (positionIdentifier == 1) im = await brandImage(im, brandId);
 
         res.status(200).send(im);
