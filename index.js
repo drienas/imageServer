@@ -72,7 +72,7 @@ const postProcessImage = (req, img) => {
       let dim = sizeOf(img);
       if (dim.width > 1920) {
         let pic = await jimp.read(img);
-        pic = await pic.scaleToFit(1920, jimp.AUTO);
+        pic = await pic.resize(1920, jimp.AUTO);
         img = await pic.getBufferAsync(jimp.MIME_JPEG);
       }
       let vin = req.params.vin;
