@@ -8,8 +8,6 @@ import cache from 'memory-cache';
 import sizeOf from 'image-size';
 import * as dotenv from 'dotenv';
 import morgan from 'morgan';
-import imagemin from 'imagemin';
-import imageminJpegtran from 'imagemin-jpegtran';
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config();
@@ -81,9 +79,6 @@ const postProcessImage = (req, img) => {
       let positionIdentifier = req.params.positionIdentifier;
       let shrink = req.query;
       if (!shrink.shrink) {
-        img = await imagemin.buffer(img, {
-          use: [imageminJpegtran()],
-        });
         resolve(img);
         return;
       }
@@ -96,9 +91,6 @@ const postProcessImage = (req, img) => {
         let pic = await jimp.read(img);
         pic = await pic.resize(parseInt(shrink), jimp.AUTO);
         pic = await pic.getBufferAsync(jimp.MIME_JPEG);
-        pic = await imagemin.buffer(pic, {
-          use: [imageminJpegtran()],
-        });
         resolve(pic);
         cache.put(id, pic, 30 * 60 * 1000);
       }
