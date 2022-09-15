@@ -1,13 +1,19 @@
-const express = require('express');
-const mongoose = require('mongoose');
-const jimp = require('jimp');
-const cors = require('cors');
-const { BasicStrategy } = require('passport-http');
-const passport = require('passport');
-const cache = require('memory-cache');
+import express from 'express';
+import mongoose from 'mongoose';
+import jimp from 'jimp';
+import cors from 'cors';
+import { BasicStrategy } from 'passport-http';
+import passport from 'passport';
+import cache from 'memory-cache';
+import sizeOf from 'image-size';
+import { config } from 'dotenv';
+import imagemin from 'imagemin';
+import imageminJpegtran from 'imagemin-jpegtran';
 
 if (process.env.NODE_ENV !== 'production') {
-  require('dotenv').config();
+  // require('dotenv').config();
+
+  config();
 }
 
 const mongo = process.env.MONGO_DB;
@@ -30,7 +36,7 @@ passport.use(
 const mongoUrl = `mongodb://${mongo}/cardata`;
 
 let BRAND;
-FONT = null;
+let FONT = null;
 
 let BRANDS = {
   BRAND: null,
@@ -66,10 +72,19 @@ const carSchema = new mongoose.Schema(
 
 const postProcessImage = (req, img) => {
   return new Promise(async (resolve, reject) => {
+    let dim = sizeOf(img);
+    if (dim.width > 1920) {
+      let pic = await jimp.read(img);
+      pic = await pic.scaleToFit(1920, jimp.AUTO);
+      img = await pic.getBufferAsync(jimp.MIME_JPEG);
+    }
     let vin = req.params.vin;
     let positionIdentifier = req.params.positionIdentifier;
     let shrink = req.query;
     if (!shrink.shrink) {
+      img = await imagemin.buffer(img, {
+        use: [imageminJpegtran()],
+      });
       resolve(img);
       return;
     }
@@ -82,6 +97,9 @@ const postProcessImage = (req, img) => {
       let pic = await jimp.read(img);
       pic = await pic.resize(parseInt(shrink), jimp.AUTO);
       pic = await pic.getBufferAsync(jimp.MIME_JPEG);
+      pic = await imagemin.buffer(pic, {
+        use: [imageminJpegtran()],
+      });
       resolve(pic);
       cache.put(id, pic, 30 * 60 * 1000);
     }
@@ -354,7 +372,6 @@ app.delete('/images/v1/link/:vin', async (req, res) => {
       return;
     }
     let deletedData = await Car.deleteOne({ _id: carData._id });
-    console.log(deletedData);
     res.status(200).json({ success: true, deletedData });
   } catch (err) {
     console.error(err);
@@ -384,7 +401,6 @@ app.delete(
         return;
       }
       let deletedData = await Car.deleteOne({ _id: carData._id });
-      console.log(deletedData);
       res.status(200).json({ success: true, deletedData });
     } catch (err) {
       console.error(err);
@@ -401,7 +417,7 @@ mongoose.connect(mongoUrl, {
 });
 
 mongoose.connection.on('connected', (err) => {
-  console.log(`Connceted to MongoDB`);
+  console.log(`Connected to MongoDB`);
   app.listen(port, async () => {
     BRAND = await jimp.read(`./LogoBrand.png`);
     BRANDS = {
