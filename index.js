@@ -6,14 +6,13 @@ import { BasicStrategy } from 'passport-http';
 import passport from 'passport';
 import cache from 'memory-cache';
 import sizeOf from 'image-size';
-import { config } from 'dotenv';
+import * as dotenv from 'dotenv';
+import morgan from 'morgan';
 import imagemin from 'imagemin';
 import imageminJpegtran from 'imagemin-jpegtran';
 
 if (process.env.NODE_ENV !== 'production') {
-  // require('dotenv').config();
-
-  config();
+  dotenv.config();
 }
 
 const mongo = process.env.MONGO_DB;
@@ -35,8 +34,7 @@ passport.use(
 
 const mongoUrl = `mongodb://${mongo}/cardata`;
 
-let BRAND;
-let FONT = null;
+let BRAND = null;
 
 let BRANDS = {
   BRAND: null,
@@ -72,36 +70,41 @@ const carSchema = new mongoose.Schema(
 
 const postProcessImage = (req, img) => {
   return new Promise(async (resolve, reject) => {
-    let dim = sizeOf(img);
-    if (dim.width > 1920) {
-      let pic = await jimp.read(img);
-      pic = await pic.scaleToFit(1920, jimp.AUTO);
-      img = await pic.getBufferAsync(jimp.MIME_JPEG);
-    }
-    let vin = req.params.vin;
-    let positionIdentifier = req.params.positionIdentifier;
-    let shrink = req.query;
-    if (!shrink.shrink) {
-      img = await imagemin.buffer(img, {
-        use: [imageminJpegtran()],
-      });
+    try {
+      let dim = sizeOf(img);
+      if (dim.width > 1920) {
+        let pic = await jimp.read(img);
+        pic = await pic.scaleToFit(1920, jimp.AUTO);
+        img = await pic.getBufferAsync(jimp.MIME_JPEG);
+      }
+      let vin = req.params.vin;
+      let positionIdentifier = req.params.positionIdentifier;
+      let shrink = req.query;
+      if (!shrink.shrink) {
+        img = await imagemin.buffer(img, {
+          use: [imageminJpegtran()],
+        });
+        resolve(img);
+        return;
+      }
+      shrink = shrink.shrink;
+      let id = `${vin}/${positionIdentifier}/${shrink}`;
+      let cached = cache.get(id);
+      if (cached) {
+        resolve(cached);
+      } else {
+        let pic = await jimp.read(img);
+        pic = await pic.resize(parseInt(shrink), jimp.AUTO);
+        pic = await pic.getBufferAsync(jimp.MIME_JPEG);
+        pic = await imagemin.buffer(pic, {
+          use: [imageminJpegtran()],
+        });
+        resolve(pic);
+        cache.put(id, pic, 30 * 60 * 1000);
+      }
+    } catch (err) {
+      console.error(err);
       resolve(img);
-      return;
-    }
-    shrink = shrink.shrink;
-    let id = `${vin}/${positionIdentifier}/${shrink}`;
-    let cached = cache.get(id);
-    if (cached) {
-      resolve(cached);
-    } else {
-      let pic = await jimp.read(img);
-      pic = await pic.resize(parseInt(shrink), jimp.AUTO);
-      pic = await pic.getBufferAsync(jimp.MIME_JPEG);
-      pic = await imagemin.buffer(pic, {
-        use: [imageminJpegtran()],
-      });
-      resolve(pic);
-      cache.put(id, pic, 30 * 60 * 1000);
     }
   });
 };
@@ -109,7 +112,7 @@ const postProcessImage = (req, img) => {
 let Image, Car;
 
 const app = express();
-
+app.use(morgan('[:date] :method :url :status - :response-time ms'));
 app.use(cors());
 
 app.get('/', (req, res) => res.status(200).send());
@@ -193,12 +196,6 @@ const brandImage = async (im, brand = 'BRAND') => {
     0,
     imageTmp.bitmap.height - BRANDS[brand].bitmap.height
   );
-  return imageTmp.getBufferAsync(jimp.MIME_JPEG);
-};
-
-const brandVIN = async (im, vin) => {
-  let imageTmp = await jimp.read(im);
-  imageTmp.print(FONT, 10, 10, vin);
   return imageTmp.getBufferAsync(jimp.MIME_JPEG);
 };
 
@@ -417,7 +414,7 @@ mongoose.connect(mongoUrl, {
 });
 
 mongoose.connection.on('connected', (err) => {
-  console.log(`Connected to MongoDB`);
+  console.log(`Connected to MongoDB...`);
   app.listen(port, async () => {
     BRAND = await jimp.read(`./LogoBrand.png`);
     BRANDS = {
@@ -426,7 +423,6 @@ mongoose.connection.on('connected', (err) => {
       BRANDAPPROVED: await jimp.read(`./LogoBORApproved.png`),
       BRANDBOR: await jimp.read(`./LogoBOR.png`),
     };
-    FONT = await jimp.loadFont(jimp.FONT_SANS_32_BLACK);
     console.log(`App listening on port ${port}`);
     Image = mongoose.model('Image', imageSchema);
     Car = mongoose.model('Car', carSchema);
