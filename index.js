@@ -182,6 +182,7 @@ app.get('/images/v1/raw/:vin/:positionIdentifier', async (req, res) => {
 });
 
 const brandImage = async (im, brand = 'BRAND') => {
+  if (!BRANDS[brand]) return im;
   let imageTmp = await jimp.read(im);
   imageTmp = await imageTmp.composite(
     BRANDS[brand],
@@ -413,7 +414,8 @@ mongoose.connection.on('connected', (err) => {
       BRAND: await jimp.read(`./LogoBrand.png`),
       BRANDDSG: await jimp.read(`./LogoDSG.png`),
       BRANDAPPROVED: await jimp.read(`./LogoBORApproved.png`),
-      BRANDBOR: await jimp.read(`./LogoBOR.png`),
+      // BRANDBOR: await jimp.read(`./LogoBOR.png`),
+      BRANDBOR: null,
     };
     console.log(`App listening on port ${port}`);
     Image = mongoose.model('Image', imageSchema);
