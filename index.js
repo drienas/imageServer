@@ -5,9 +5,11 @@ import cors from 'cors';
 import { BasicStrategy } from 'passport-http';
 import passport from 'passport';
 import cache from 'memory-cache';
-import sizeOf from 'image-size';
+// import sizeOf from 'image-size';
 import * as dotenv from 'dotenv';
 import morgan from 'morgan';
+import fs from 'fs';
+import path from 'path';
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config();
@@ -31,6 +33,7 @@ passport.use(
 );
 
 const mongoUrl = `mongodb://${mongo}/cardata`;
+const basePathLocal = path.normalize('own');
 
 let BRAND = null;
 
@@ -69,12 +72,12 @@ const carSchema = new mongoose.Schema(
 const postProcessImage = (req, img) => {
   return new Promise(async (resolve, reject) => {
     try {
-      let dim = sizeOf(img);
-      if (dim.width > 1920) {
-        let pic = await jimp.read(img);
-        pic = await pic.resize(1920, jimp.AUTO);
-        img = await pic.getBufferAsync(jimp.MIME_JPEG);
-      }
+      // let dim = sizeOf(img);
+      // if (dim.width > 1920) {
+      //   let pic = await jimp.read(img);
+      //   pic = await pic.resize(1920, jimp.AUTO);
+      //   img = await pic.getBufferAsync(jimp.MIME_JPEG);
+      // }
       let vin = req.params.vin;
       let positionIdentifier = req.params.positionIdentifier;
       let shrink = req.query;
@@ -103,6 +106,88 @@ const postProcessImage = (req, img) => {
 
 let Image, Car;
 
+const findFromOwnStore = (vin) => {
+  return new Promise((resolve, reject) => {
+    let found = false;
+    let images = [];
+    const fullPath = path.join(basePathLocal, vin);
+    if (!fs.existsSync(fullPath)) {
+      resolve({ found });
+      return;
+    }
+    let files = fs.readdirSync(fullPath);
+    let r = new RegExp(`^${vin}_\\d{1,2}.\\w+$`);
+    files = files.filter((x) => r.test(x));
+    files = files.map((x) => ({
+      vin,
+      positionIdentifier: parseInt(x.split('_')[1].split('.')[0]),
+      fileName: x,
+    }));
+    found = true;
+    resolve({
+      found,
+      images: files,
+      local: true,
+    });
+  });
+};
+
+const getImageBuffer = (p) => {
+  const fullPath = path.join(basePathLocal, p);
+  return { image: fs.readFileSync(fullPath) };
+};
+
+const brandImage = async (im, brand = 'BRAND') => {
+  if (!BRANDS[brand]) return im;
+  let imageTmp = await jimp.read(im);
+  imageTmp = await imageTmp.composite(
+    BRANDS[brand],
+    0,
+    imageTmp.bitmap.height - BRANDS[brand].bitmap.height
+  );
+  return imageTmp.getBufferAsync(jimp.MIME_JPEG);
+};
+
+const handleCarData = (carData, vin, positionIdentifier, res) => {
+  return new Promise(async (resolve, reject) => {
+    let image = null;
+    if (!carData) {
+      let hasLocalImage = await findFromOwnStore(vin);
+      if (!hasLocalImage.found) {
+        res.status(404).send();
+        reject();
+        return;
+      }
+      let positionImage = hasLocalImage.images.find(
+        (x) => x.positionIdentifier == positionIdentifier
+      );
+      if (!positionImage) {
+        res.status(404).send();
+        reject();
+        return;
+      }
+      image = getImageBuffer(`${positionImage.vin}/${positionImage.fileName}`);
+    } else {
+      image = carData.images.find(
+        (x) => x.positionIdentifier == positionIdentifier
+      );
+      if (!image) {
+        res.status(404).send();
+        reject();
+        return;
+      }
+      let imageId = image.imageId;
+      image = await Image.findOne({ _id: imageId });
+      if (!image) {
+        res.status(404).send();
+        reject();
+        return;
+      }
+    }
+    resolve(image);
+  });
+};
+
 const app = express();
 app.use(morgan('[:date] :method :url :status - :response-time ms'));
 app.use(cors());
@@ -121,21 +206,31 @@ app.get('/images/v1/status/:vin', async (req, res) => {
       return;
     }
     let carData = await Car.findOne({ vin });
+    let returnData = {
+      success: false,
+      found: false,
+      images: [],
+    };
     if (!carData) {
-      res.status(200).json({
-        success: true,
-        found: false,
-      });
-      return;
-    } else {
-      res.status(200).json({
-        success: true,
-        found: true,
-        images: carData.images
-          .sort((a, b) => a.positionIdentifier - b.positionIdentifier)
-          .map((x) => `/${vin}/${x.positionIdentifier}`),
-      });
+      let hasLocalImage = await findFromOwnStore(vin);
+      if (!hasLocalImage.found) {
+        res.status(200).json({
+          success: true,
+          found: false,
+        });
+        return;
+      }
+      carData = hasLocalImage;
     }
+    returnData = {
+      success: true,
+      found: true,
+      images: carData.images
+        .sort((a, b) => a.positionIdentifier - b.positionIdentifier)
+        .map((x) => `/${vin}/${x.positionIdentifier}`),
+      photofairy: carData.local ? !carData.local : true,
+    };
+    res.status(200).json(returnData);
   } catch (err) {
     res.json(500).json({ success: false, found: false, error: err });
   }
@@ -154,43 +249,20 @@ app.get('/images/v1/raw/:vin/:positionIdentifier', async (req, res) => {
       return;
     }
     let carData = await Car.findOne({ vin });
-    if (!carData) {
-      res.status(404).send();
-      return;
-    } else {
-      let image = carData.images.find(
-        (x) => x.positionIdentifier == positionIdentifier
-      );
-      if (!image) {
-        res.status(404).send();
-        return;
-      }
-      let imageId = image.imageId;
-      image = await Image.findOne({ _id: imageId });
-      if (!image) {
-        res.status(404).send();
-        return;
-      }
-      res.set('Content-Type', 'image/jpeg');
-      let i = image.image;
-      i = await postProcessImage(req, i);
-      res.status(200).send(i);
-    }
+
+    handleCarData(carData, vin, positionIdentifier, res)
+      .then(async (image) => {
+        res.set('Content-Type', 'image/jpeg');
+        let i = image.image;
+        i = await postProcessImage(req, i);
+        res.status(200).send(i);
+      })
+      .catch(() => {});
   } catch (err) {
+    console.error(err);
     res.json(500).json({ success: false, found: false, error: err });
   }
 });
-
-const brandImage = async (im, brand = 'BRAND') => {
-  if (!BRANDS[brand]) return im;
-  let imageTmp = await jimp.read(im);
-  imageTmp = await imageTmp.composite(
-    BRANDS[brand],
-    0,
-    imageTmp.bitmap.height - BRANDS[brand].bitmap.height
-  );
-  return imageTmp.getBufferAsync(jimp.MIME_JPEG);
-};
 
 app.get('/images/v1/brand/:vin/:positionIdentifier', async (req, res) => {
   try {
@@ -205,29 +277,14 @@ app.get('/images/v1/brand/:vin/:positionIdentifier', async (req, res) => {
       return;
     }
     let carData = await Car.findOne({ vin });
-    if (!carData) {
-      res.status(404).send();
-      return;
-    } else {
-      let image = carData.images.find(
-        (x) => x.positionIdentifier == positionIdentifier
-      );
-      if (!image) {
-        res.status(404).send();
-        return;
-      }
-      let imageId = image.imageId;
-      image = await Image.findOne({ _id: imageId });
-      if (!image) {
-        res.status(404).send();
-        return;
-      }
-      res.set('Content-Type', 'image/jpeg');
-      let im = image.image;
-      if (positionIdentifier == 1) im = await brandImage(im);
-
-      res.status(200).send(im);
-    }
+    handleCarData(carData, vin, positionIdentifier, res)
+      .then(async (image) => {
+        res.set('Content-Type', 'image/jpeg');
+        let im = image.image;
+        if (positionIdentifier == 1) im = await brandImage(im);
+        res.status(200).send(im);
+      })
+      .catch(() => {});
   } catch (err) {
     res.json(500).json({ success: false, found: false, error: err });
   }
@@ -256,30 +313,16 @@ app.get(
         return;
       }
       let carData = await Car.findOne({ vin });
-      if (!carData) {
-        res.status(404).send();
-        return;
-      } else {
-        let image = carData.images.find(
-          (x) => x.positionIdentifier == positionIdentifier
-        );
-        if (!image) {
-          res.status(404).send();
-          return;
-        }
-        let imageId = image.imageId;
-        image = await Image.findOne({ _id: imageId });
-        if (!image) {
-          res.status(404).send();
-          return;
-        }
-        res.set('Content-Type', 'image/jpeg');
-        let im = image.image;
-        im = await postProcessImage(req, im);
-        if (positionIdentifier == 1) im = await brandImage(im, brandId);
 
-        res.status(200).send(im);
-      }
+      handleCarData(carData, vin, positionIdentifier, res)
+        .then(async (image) => {
+          res.set('Content-Type', 'image/jpeg');
+          let im = image.image;
+          im = await postProcessImage(req, im);
+          if (positionIdentifier == 1) im = await brandImage(im, brandId);
+          res.status(200).send(im);
+        })
+        .catch(() => {});
     } catch (err) {
       res.json(500).json({ success: false, found: false, error: err });
     }
