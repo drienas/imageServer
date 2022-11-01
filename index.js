@@ -229,6 +229,8 @@ app.get('/images/v1/status/:vin', async (req, res) => {
         .sort((a, b) => a.positionIdentifier - b.positionIdentifier)
         .map((x) => `/${vin}/${x.positionIdentifier}`),
       photofairy: carData.local ? !carData.local : true,
+      createdAt: carData.createdAt,
+      updatedAt: carData.updatedAt,
     };
     res.status(200).json(returnData);
   } catch (err) {
