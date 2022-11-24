@@ -292,12 +292,51 @@ app.get('/images/v1/brand/:vin/:positionIdentifier', async (req, res) => {
   }
 });
 
+// app.get(
+//   '/images/v2/brand/:brandId/:vin/:positionIdentifier',
+//   async (req, res) => {
+//     try {
+//       let vin = req.params.vin;
+//       let brandId = req.params.brandId;
+//       if (!Object.keys(BRANDS).includes(brandId)) {
+//         res.status(400).json({
+//           success: false,
+//           message: 'Invalid brandId set',
+//         });
+//         return;
+//       }
+//       let positionIdentifier = req.params.positionIdentifier;
+//       if (!/^\w{17}$/g.test(vin)) {
+//         res.status(400).json({
+//           success: false,
+//           found: false,
+//           error: `${vin} is not a valid VIN.`,
+//         });
+//         return;
+//       }
+//       let carData = await Car.findOne({ vin });
+
+//       handleCarData(carData, vin, positionIdentifier, res)
+//         .then(async (image) => {
+//           res.set('Content-Type', 'image/jpeg');
+//           let im = image.image;
+//           im = await postProcessImage(req, im);
+//           if (positionIdentifier == 1) im = await brandImage(im, brandId);
+//           res.status(200).send(im);
+//         })
+//         .catch(() => {});
+//     } catch (err) {
+//       res.json(500).json({ success: false, found: false, error: err });
+//     }
+//   }
+// );
+
 app.get(
-  '/images/v2/brand/:brandId/:vin/:positionIdentifier',
+  /^\/images\/v2\/brand(?:\/(\w+))(?:\/(\w{17}))(?:\/(\d{1,2}))(\.jpg)??/,
   async (req, res) => {
     try {
-      let vin = req.params.vin;
-      let brandId = req.params.brandId;
+      let vin = req.params[1];
+      let brandId = req.params[0];
       if (!Object.keys(BRANDS).includes(brandId)) {
         res.status(400).json({
           success: false,
@@ -305,7 +344,7 @@ app.get(
         });
         return;
       }
-      let positionIdentifier = req.params.positionIdentifier;
+      let positionIdentifier = req.params[2];
       if (!/^\w{17}$/g.test(vin)) {
         res.status(400).json({
           success: false,
