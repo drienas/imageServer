@@ -493,13 +493,13 @@ mongoose.connect(mongoUrl, {
 mongoose.connection.on('connected', (err) => {
   console.log(`Connected to MongoDB...`);
   app.listen(port, async () => {
-    BRAND = await jimp.read(`./LogoBrand.png`);
+    BRAND = await jimp.read(`./Header_Petrol.png`);
     BRANDS = {
-      BRAND: await jimp.read(`./LogoBrand.png`),
-      BRANDDSG: await jimp.read(`./LogoDSG.png`),
-      BRANDAPPROVED: await jimp.read(`./LogoBORApproved.png`),
-      // BRANDBOR: await jimp.read(`./LogoBOR.png`),
-      BRANDBOR: null,
+      BRAND: await jimp.read(`./Header_Petrol.png`),
+      BRANDDSG: await jimp.read(`./Header_Petrol.png`),
+      BRANDAPPROVED: await jimp.read(`./Header_Petrol.png`),
+      BRANDBOR: await jimp.read(`./Header_Petrol.png`),
+      // BRANDBOR: null,
     };
     console.log(`App listening on port ${port}`);
     Image = mongoose.model('Image', imageSchema);
