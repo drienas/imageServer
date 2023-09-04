@@ -88,6 +88,7 @@ const postProcessImage = (req, img) => {
       shrink = shrink.shrink;
       let id = `${vin}/${positionIdentifier}/${shrink}`;
       let cached = cache.get(id);
+      cached = false;
       if (cached) {
         resolve(cached);
       } else {
