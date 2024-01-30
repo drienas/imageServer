@@ -1,17 +1,17 @@
-import express from 'express';
-import mongoose from 'mongoose';
-import jimp from 'jimp';
-import cors from 'cors';
-import { BasicStrategy } from 'passport-http';
-import passport from 'passport';
-import cache from 'memory-cache';
-// import sizeOf from 'image-size';
-import * as dotenv from 'dotenv';
-import morgan from 'morgan';
-import fs from 'fs';
-import path from 'path';
+import express from "express";
+import mongoose from "mongoose";
+import jimp from "jimp";
+import cors from "cors";
+import { BasicStrategy } from "passport-http";
+import passport from "passport";
+import cache from "memory-cache";
+import * as dotenv from "dotenv";
+import morgan from "morgan";
+import fs from "fs";
+import path from "path";
+import sharp from "sharp";
 
-if (process.env.NODE_ENV !== 'production') {
+if (process.env.NODE_ENV !== "production") {
   dotenv.config();
 }
 
@@ -33,7 +33,7 @@ passport.use(
 );
 
 const mongoUrl = `mongodb://${mongo}/cardata`;
-const basePathLocal = path.normalize('own');
+const basePathLocal = path.normalize("own");
 
 let BRAND = null;
 
@@ -72,12 +72,6 @@ const carSchema = new mongoose.Schema(
 const postProcessImage = (req, img) => {
   return new Promise(async (resolve, reject) => {
     try {
-      // let dim = sizeOf(img);
-      // if (dim.width > 1920) {
-      //   let pic = await jimp.read(img);
-      //   pic = await pic.resize(1920, jimp.AUTO);
-      //   img = await pic.getBufferAsync(jimp.MIME_JPEG);
-      // }
       let vin = req.params.vin;
       let positionIdentifier = req.params.positionIdentifier;
       let shrink = req.query;
@@ -92,9 +86,7 @@ const postProcessImage = (req, img) => {
       if (cached) {
         resolve(cached);
       } else {
-        let pic = await jimp.read(img);
-        pic = await pic.resize(parseInt(shrink), jimp.AUTO);
-        pic = await pic.getBufferAsync(jimp.MIME_JPEG);
+        let pic = await sharp(img).resize(parseInt(shrink)).jpeg().toBuffer();
         resolve(pic);
         cache.put(id, pic, 30 * 60 * 1000);
       }
@@ -121,7 +113,7 @@ const findFromOwnStore = (vin) => {
     files = files.filter((x) => r.test(x));
     files = files.map((x) => ({
       vin,
-      positionIdentifier: parseInt(x.split('_')[1].split('.')[0]),
+      positionIdentifier: parseInt(x.split("_")[1].split(".")[0]),
       fileName: x,
     }));
     found = true;
@@ -138,7 +130,7 @@ const getImageBuffer = (p) => {
   return { image: fs.readFileSync(fullPath) };
 };
 
-const brandImage = async (im, brand = 'BRAND') => {
+const brandImage = async (im, brand = "BRAND") => {
   if (!BRANDS[brand]) return im;
   let imageTmp = await jimp.read(im);
   imageTmp = await imageTmp.composite(
@@ -190,12 +182,12 @@ const handleCarData = (carData, vin, positionIdentifier, res) => {
 };
 
 const app = express();
-app.use(morgan('[:date] :method :url :status - :response-time ms'));
+app.use(morgan("[:date] :method :url :status - :response-time ms"));
 app.use(cors());
 
-app.get('/', (req, res) => res.status(200).send());
+app.get("/", (req, res) => res.status(200).send());
 
-app.get('/images/v1/status/:vin', async (req, res) => {
+app.get("/images/v1/status/:vin", async (req, res) => {
   try {
     let vin = req.params.vin;
     if (!/^\w{17}$/g.test(vin)) {
@@ -239,7 +231,7 @@ app.get('/images/v1/status/:vin', async (req, res) => {
   }
 });
 
-app.get('/images/v1/raw/:vin/:positionIdentifier', async (req, res) => {
+app.get("/images/v1/raw/:vin/:positionIdentifier", async (req, res) => {
   try {
     let vin = req.params.vin;
     let positionIdentifier = req.params.positionIdentifier;
@@ -255,7 +247,7 @@ app.get('/images/v1/raw/:vin/:positionIdentifier', async (req, res) => {
 
     handleCarData(carData, vin, positionIdentifier, res)
       .then(async (image) => {
-        res.set('Content-Type', 'image/jpeg');
+        res.set("Content-Type", "image/jpeg");
         let i = image.image;
         i = await postProcessImage(req, i);
         res.status(200).send(i);
@@ -267,7 +259,7 @@ app.get('/images/v1/raw/:vin/:positionIdentifier', async (req, res) => {
   }
 });
 
-app.get('/images/v1/brand/:vin/:positionIdentifier', async (req, res) => {
+app.get("/images/v1/brand/:vin/:positionIdentifier", async (req, res) => {
   try {
     let vin = req.params.vin;
     let positionIdentifier = req.params.positionIdentifier;
@@ -282,7 +274,7 @@ app.get('/images/v1/brand/:vin/:positionIdentifier', async (req, res) => {
     let carData = await Car.findOne({ vin });
     handleCarData(carData, vin, positionIdentifier, res)
       .then(async (image) => {
-        res.set('Content-Type', 'image/jpeg');
+        res.set("Content-Type", "image/jpeg");
         let im = image.image;
         if (positionIdentifier == 1) im = await brandImage(im);
         res.status(200).send(im);
@@ -293,45 +285,6 @@ app.get('/images/v1/brand/:vin/:positionIdentifier', async (req, res) => {
   }
 });
 
-// app.get(
-//   '/images/v2/brand/:brandId/:vin/:positionIdentifier',
-//   async (req, res) => {
-//     try {
-//       let vin = req.params.vin;
-//       let brandId = req.params.brandId;
-//       if (!Object.keys(BRANDS).includes(brandId)) {
-//         res.status(400).json({
-//           success: false,
-//           message: 'Invalid brandId set',
-//         });
-//         return;
-//       }
-//       let positionIdentifier = req.params.positionIdentifier;
-//       if (!/^\w{17}$/g.test(vin)) {
-//         res.status(400).json({
-//           success: false,
-//           found: false,
-//           error: `${vin} is not a valid VIN.`,
-//         });
-//         return;
-//       }
-//       let carData = await Car.findOne({ vin });
-
-//       handleCarData(carData, vin, positionIdentifier, res)
-//         .then(async (image) => {
-//           res.set('Content-Type', 'image/jpeg');
-//           let im = image.image;
-//           im = await postProcessImage(req, im);
-//           if (positionIdentifier == 1) im = await brandImage(im, brandId);
-//           res.status(200).send(im);
-//         })
-//         .catch(() => {});
-//     } catch (err) {
-//       res.json(500).json({ success: false, found: false, error: err });
-//     }
-//   }
-// );
-
 app.get(
   /^\/images\/v2\/brand(?:\/(\w+))(?:\/(\w{17}))(?:\/(\d{1,2}))(\.jpg)??/,
   async (req, res) => {
@@ -341,7 +294,7 @@ app.get(
       if (!Object.keys(BRANDS).includes(brandId)) {
         res.status(400).json({
           success: false,
-          message: 'Invalid brandId set',
+          message: "Invalid brandId set",
         });
         return;
       }
@@ -358,7 +311,7 @@ app.get(
 
       handleCarData(carData, vin, positionIdentifier, res)
         .then(async (image) => {
-          res.set('Content-Type', 'image/jpeg');
+          res.set("Content-Type", "image/jpeg");
           let im = image.image;
           im = await postProcessImage(req, im);
           if (positionIdentifier == 1) im = await brandImage(im, brandId);
@@ -371,7 +324,7 @@ app.get(
   }
 );
 
-app.get('/images/v1/status/changedsince/:seconds', async (req, res) => {
+app.get("/images/v1/status/changedsince/:seconds", async (req, res) => {
   try {
     let sec = req.params.seconds;
     let timestamp = Date.now() - sec * 1000;
@@ -384,7 +337,7 @@ app.get('/images/v1/status/changedsince/:seconds', async (req, res) => {
   }
 });
 
-app.get('/images/v1/link/:from/:to', async (req, res) => {
+app.get("/images/v1/link/:from/:to", async (req, res) => {
   try {
     let from = req.params.from;
     let to = req.params.to;
@@ -421,7 +374,7 @@ app.get('/images/v1/link/:from/:to', async (req, res) => {
   }
 });
 
-app.delete('/images/v1/link/:vin', async (req, res) => {
+app.delete("/images/v1/link/:vin", async (req, res) => {
   let vin = req.params.vin;
   if (!/^\w{17}$/g.test(vin)) {
     res.status(400).json({
@@ -455,8 +408,8 @@ app.delete('/images/v1/link/:vin', async (req, res) => {
 });
 
 app.delete(
-  '/images/v1/original/:vin',
-  passport.authenticate('basic', { session: false }),
+  "/images/v1/original/:vin",
+  passport.authenticate("basic", { session: false }),
   async (req, res) => {
     let vin = req.params.vin;
     if (!/^\w{17}$/g.test(vin)) {
@@ -491,7 +444,7 @@ mongoose.connect(mongoUrl, {
   useCreateIndex: true,
 });
 
-mongoose.connection.on('connected', (err) => {
+mongoose.connection.on("connected", (err) => {
   console.log(`Connected to MongoDB...`);
   app.listen(port, async () => {
     BRAND = await jimp.read(`./Header_Petrol.png`);
@@ -503,17 +456,17 @@ mongoose.connection.on('connected', (err) => {
       // BRANDBOR: null,
     };
     console.log(`App listening on port ${port}`);
-    Image = mongoose.model('Image', imageSchema);
-    Car = mongoose.model('Car', carSchema);
+    Image = mongoose.model("Image", imageSchema);
+    Car = mongoose.model("Car", carSchema);
   });
 });
 
-mongoose.connection.on('error', (err) => {
+mongoose.connection.on("error", (err) => {
   console.error(err);
   process.exit(0);
 });
 
-mongoose.connection.on('disconnected', (msg) => {
+mongoose.connection.on("disconnected", (msg) => {
   console.error(msg);
   process.exit(0);
 });
