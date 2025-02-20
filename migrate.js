@@ -75,7 +75,7 @@ const idToPathMap = new Map();
 // Migriere ein einzelnes Auto mit seinen Bildern
 async function migrateCar(car, Image) {
   try {
-    console.log(`Migrating car ${car.vin}...`);
+    console.log(`Prüfe Migration für Auto ${car.vin}...`);
 
     // Prüfe, ob das Auto bereits in Supabase existiert
     const { data: existingCar, error: queryError } = await supabase
@@ -89,13 +89,56 @@ async function migrateCar(car, Image) {
       return false;
     }
 
+    // Wenn das Auto bereits existiert, vergleiche die Zeitstempel
+    if (existingCar) {
+      const mongoTimestamp = car.updatedAt || car.createdAt;
+      const supabaseTimestamp = new Date(
+        existingCar.updated_at || existingCar.created_at
+      );
+
+      // Auch wenn wir das Auto überspringen, müssen wir die idToPathMap für verlinkte Autos befüllen
+      if (mongoTimestamp <= supabaseTimestamp) {
+        console.log(
+          `Überspringe ${
+            car.vin
+          }: Supabase-Daten sind aktueller oder gleich alt (Mongo: ${mongoTimestamp.toISOString()}, Supabase: ${supabaseTimestamp.toISOString()})`
+        );
+
+        // Befülle die idToPathMap mit den existierenden Bildern
+        for (const imgEntry of car.images) {
+          const existingImage = existingCar.images.find(
+            (img) => img.positionIdentifier === imgEntry.positionIdentifier
+          );
+          if (existingImage) {
+            idToPathMap.set(imgEntry.imageId.toString(), {
+              path: existingImage.path,
+              vin: car.vin,
+              positionIdentifier: imgEntry.positionIdentifier,
+            });
+            console.log(
+              `Mapping für verlinktes Bild ${imgEntry.imageId} aus existierendem Auto ${car.vin} erstellt`
+            );
+          }
+        }
+
+        return true; // Migration "erfolgreich", da keine Aktion notwendig
+      }
+      console.log(
+        `Aktualisiere ${
+          car.vin
+        }: MongoDB-Daten sind neuer (Mongo: ${mongoTimestamp.toISOString()}, Supabase: ${supabaseTimestamp.toISOString()})`
+      );
+    } else {
+      console.log(`Migriere neues Auto ${car.vin}`);
+    }
+
     // Bilder sammeln und hochladen
     const imageEntries = [];
     for (const imgEntry of car.images) {
       try {
         const imageDoc = await Image.findById(imgEntry.imageId);
         if (!imageDoc) {
-          console.warn(`Image not found for ID ${imgEntry.imageId}`);
+          console.warn(`Bild nicht gefunden für ID ${imgEntry.imageId}`);
           continue;
         }
 
@@ -116,7 +159,7 @@ async function migrateCar(car, Image) {
           });
 
         if (uploadError) {
-          console.error(`Failed to upload image for ${car.vin}:`, uploadError);
+          console.error(`Upload fehlgeschlagen für ${car.vin}:`, uploadError);
           continue;
         }
 
@@ -133,7 +176,10 @@ async function migrateCar(car, Image) {
           originalId: imgEntry.imageId.toString(),
         });
       } catch (err) {
-        console.error(`Error processing image ${imgEntry.imageId}:`, err);
+        console.error(
+          `Fehler bei der Bildverarbeitung ${imgEntry.imageId}:`,
+          err
+        );
       }
     }
 
@@ -165,7 +211,7 @@ async function migrateCar(car, Image) {
         .eq("vin", car.vin);
 
       if (error) {
-        console.error(`Failed to update car ${car.vin} in Supabase:`, error);
+        console.error(`Aktualisierung fehlgeschlagen für ${car.vin}:`, error);
         return false;
       }
     } else {
@@ -179,17 +225,24 @@ async function migrateCar(car, Image) {
       });
 
       if (error) {
-        console.error(`Failed to insert car ${car.vin} in Supabase:`, error);
+        console.error(`Einfügen fehlgeschlagen für ${car.vin}:`, error);
         return false;
       }
     }
 
+    // Lösche relevante Cache-Einträge
+    await redis.del(`status:${car.vin}`);
+    const changedSinceCacheKeys = await redis.keys("changedsince:*");
+    if (changedSinceCacheKeys.length > 0) {
+      await redis.del(changedSinceCacheKeys);
+    }
+
     console.log(
-      `Successfully migrated car ${car.vin} with ${imageEntries.length} images`
+      `Migration erfolgreich für ${car.vin} mit ${imageEntries.length} Bildern`
     );
     return true;
   } catch (error) {
-    console.error(`Error migrating car ${car.vin}:`, error);
+    console.error(`Fehler bei der Migration von ${car.vin}:`, error);
     return false;
   }
 }
@@ -197,17 +250,58 @@ async function migrateCar(car, Image) {
 // Verknüpfte Autos migrieren
 async function migrateLinkedCars(Car) {
   try {
-    console.log("Migrating linked cars...");
+    console.log("Prüfe verlinkte Autos...");
     const linkedCars = await Car.find({ linked: true });
-    console.log(`Found ${linkedCars.length} linked cars to migrate`);
+    console.log(`${linkedCars.length} verlinkte Autos gefunden`);
 
     let successCount = 0;
 
     for (const linkedCar of linkedCars) {
       try {
+        // Prüfe zuerst, ob das Auto bereits in Supabase existiert
+        const { data: existingCar, error: queryError } = await supabase
+          .from("cars")
+          .select("*")
+          .eq("vin", linkedCar.vin)
+          .single();
+
+        if (queryError && queryError.code !== "PGRST116") {
+          console.error(
+            `Fehler beim Prüfen des verlinkten Autos ${linkedCar.vin}:`,
+            queryError
+          );
+          continue;
+        }
+
+        // Wenn das Auto existiert, vergleiche die Zeitstempel
+        if (existingCar) {
+          // Setze Fallback-Zeitstempel für MongoDB, falls keine vorhanden sind
+          const mongoTimestamp =
+            linkedCar.updatedAt || linkedCar.createdAt || new Date(0);
+          const supabaseTimestamp = new Date(
+            existingCar.updated_at || existingCar.created_at || new Date(0)
+          );
+
+          if (mongoTimestamp <= supabaseTimestamp) {
+            console.log(
+              `Überspringe verlinktes Auto ${
+                linkedCar.vin
+              }: Supabase-Daten sind aktueller oder gleich alt (Mongo: ${mongoTimestamp.toISOString()}, Supabase: ${supabaseTimestamp.toISOString()})`
+            );
+            successCount++; // Zählt als Erfolg, da keine Aktion notwendig
+            continue;
+          }
+          console.log(
+            `Aktualisiere verlinktes Auto ${
+              linkedCar.vin
+            }: MongoDB-Daten sind neuer (Mongo: ${mongoTimestamp.toISOString()}, Supabase: ${supabaseTimestamp.toISOString()})`
+          );
+        } else {
+          console.log(`Migriere neues verlinktes Auto ${linkedCar.vin}`);
+        }
+
         // Umwandlung der ObjectIds in Supabase-Pfade
         const imageEntries = [];
-
         for (const imgEntry of linkedCar.images) {
           const originalIdStr = imgEntry.imageId.toString();
           const mappedImage = idToPathMap.get(originalIdStr);
@@ -220,43 +314,61 @@ async function migrateLinkedCars(Car) {
             });
           } else {
             console.warn(
-              `Mapping not found for linked image ID ${originalIdStr}`
+              `Mapping nicht gefunden für verlinktes Bild ${originalIdStr} in Auto ${linkedCar.vin}`
             );
           }
         }
 
         if (imageEntries.length === 0) {
           console.warn(
-            `No images could be mapped for linked car ${linkedCar.vin}`
+            `Keine Bilder konnten für das verlinkte Auto ${linkedCar.vin} gemappt werden`
           );
           continue;
         }
 
-        // In Supabase einfügen
-        const { data, error } = await supabase.from("cars").upsert({
+        // In Supabase einfügen oder aktualisieren
+        const { error } = await supabase.from("cars").upsert({
           vin: linkedCar.vin,
           images: imageEntries,
           linked: true,
-          created_at: linkedCar.createdAt?.toISOString(),
+          created_at: linkedCar.createdAt
+            ? linkedCar.createdAt.toISOString()
+            : new Date().toISOString(),
           updated_at: new Date().toISOString(),
         });
 
         if (error) {
-          console.error(`Failed to insert linked car ${linkedCar.vin}:`, error);
+          console.error(
+            `Fehler beim Speichern des verlinkten Autos ${linkedCar.vin}:`,
+            error
+          );
           continue;
         }
 
+        // Cache-Einträge löschen
+        await redis.del(`status:${linkedCar.vin}`);
+        const changedSinceCacheKeys = await redis.keys("changedsince:*");
+        if (changedSinceCacheKeys.length > 0) {
+          await redis.del(changedSinceCacheKeys);
+        }
+
+        console.log(
+          `Verlinktes Auto ${linkedCar.vin} erfolgreich migriert mit ${imageEntries.length} Bildern`
+        );
         successCount++;
       } catch (err) {
-        console.error(`Error processing linked car ${linkedCar.vin}:`, err);
+        console.error(
+          `Fehler bei der Verarbeitung des verlinkten Autos ${linkedCar.vin}:`,
+          err
+        );
       }
     }
 
     console.log(
-      `Successfully migrated ${successCount} of ${linkedCars.length} linked cars`
+      `Migration der verlinkten Autos abgeschlossen. Erfolg: ${successCount}/${linkedCars.length}`
     );
   } catch (error) {
-    console.error("Error migrating linked cars:", error);
+    console.error("Fehler bei der Migration der verlinkten Autos:", error);
   }
 }
 
@@ -278,7 +390,9 @@ async function runMigration() {
     let currentBatch = 0;
 
     while (processedCount < totalCars) {
+      // Sortiere nach updatedAt und createdAt absteigend (neueste zuerst)
       const cars = await Car.find({ linked: { $ne: true } })
+        .sort({ updatedAt: -1, createdAt: -1 })
         .skip(currentBatch * BATCH_SIZE)
         .limit(BATCH_SIZE);
 
@@ -309,7 +423,14 @@ async function runMigration() {
       `Completed original cars migration. Success: ${successCount}/${totalCars}`
     );
 
-    // Migriere verknüpfte Autos
+    // Migriere verlinkte Autos, auch hier nach Zeitstempel sortiert
+    console.log("Prüfe verlinkte Autos...");
+    const linkedCars = await Car.find({ linked: true }).sort({
+      updatedAt: -1,
+      createdAt: -1,
+    });
+    console.log(`${linkedCars.length} verlinkte Autos gefunden`);
+
     await migrateLinkedCars(Car);
 
     console.log("Migration complete");

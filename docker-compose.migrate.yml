@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  migration:
+    build:
+      context: .
+      dockerfile: Dockerfile.migrate
+    environment:
+      - NODE_ENV=production
+      # Alle Umgebungsvariablen aus .env werden automatisch übernommen
+    networks:
+      - supabase_default
+      - redis_default
+    restart: "no" # Läuft einmal und stoppt dann
+
+networks:
+  supabase_default:
+    external: true
+  redis_default:
+    external: true 

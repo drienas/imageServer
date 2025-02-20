@@ -1,0 +1,23 @@
+# Basis Image
+FROM node:18-alpine
+
+# Arbeitsverzeichnis erstellen
+WORKDIR /app
+
+# Abhängigkeiten zuerst kopieren und installieren
+COPY package*.json ./
+RUN npm install
+
+# Sharp für Alpine Linux neu kompilieren
+RUN npm rebuild sharp
+
+# Anwendungsdateien kopieren
+COPY migrate.js ./
+COPY .env ./
+
+# Benutzer erstellen und Berechtigungen setzen
+RUN chown -R node:node /app
+USER node
+
+# Nur migrate.js mit migrate Parameter ausführen
+CMD ["node", "migrate.js", "migrate"] 

@@ -331,37 +331,74 @@ const findFromOwnStore = (vin) => {
  * Fügt Branding zu einem Bild hinzu
  * @param {Buffer} imageBuffer - Originalbild
  * @param {string} brand - Branding-Variante
+ * @param {number|null} requestedWidth - Angeforderte Bildbreite (optional)
  * @returns {Promise<Buffer>} Bild mit Branding
  */
-const brandImage = async (imageBuffer, brand = "BRAND") => {
+const brandImage = async (
+  imageBuffer,
+  brand = "BRAND",
+  requestedWidth = null
+) => {
   if (!BRANDS[brand]) {
     console.log(`[Brand] No branding asset for ${brand}, skipping`);
     return imageBuffer;
   }
 
   try {
+    // Füge die angeforderte Breite zum Cache-Key hinzu
     const cacheKey = `brand:${brand}:${imageBuffer
       .toString("base64")
-      .slice(0, 20)}`;
+      .slice(0, 20)}${requestedWidth ? `:${requestedWidth}` : ""}`;
 
     const cachedImage = await getFromCache(cacheKey);
     if (cachedImage) {
       return cachedImage;
     }
 
-    console.log(`[Brand] Applying ${brand} branding`);
-    const processedImage = await sharp(imageBuffer)
+    console.log(
+      `[Brand] Applying ${brand} branding${
+        requestedWidth ? ` for width ${requestedWidth}px` : ""
+      }`
+    );
+
+    // Hole die Dimensionen beider Bilder
+    const [imageMetadata, brandingMetadata] = await Promise.all([
+      sharp(imageBuffer).metadata(),
+      sharp(BRANDS[brand]).metadata(),
+    ]);
+
+    // Bereite das Branding vor
+    let brandingToApply = BRANDS[brand];
+
+    // Bestimme die Zielbreite (entweder die angeforderte oder die des Originalbildes)
+    const targetWidth = requestedWidth || imageMetadata.width;
+
+    // Wenn das Ziel schmaler ist als das Branding, verkleinere das Branding
+    if (targetWidth < brandingMetadata.width) {
+      console.log(
+        `[Brand] Resizing branding to match target width (${targetWidth}px)`
+      );
+      brandingToApply = await sharp(BRANDS[brand])
+        .resize(targetWidth, null, {
+          fit: "inside",
+          withoutEnlargement: false,
+        })
+        .toBuffer();
+    }
+
+    // Füge das (möglicherweise verkleinerte) Branding hinzu
+    const finalImage = await sharp(imageBuffer)
       .composite([
         {
-          input: BRANDS[brand],
+          input: brandingToApply,
           gravity: "south",
         },
       ])
       .jpeg()
       .toBuffer();
 
-    await setCache(cacheKey, processedImage);
-    return processedImage;
+    await setCache(cacheKey, finalImage);
+    return finalImage;
   } catch (error) {
     console.error(`[Brand] Error applying ${brand}:`, error.message);
     return imageBuffer;
@@ -510,50 +547,38 @@ app.get("/images/v1/raw/:vin/:positionIdentifier", async (req, res) => {
     res.status(500).json({ success: false, found: false, error: err.message });
   }
 });
+
 app.get("/images/v1/brand/:vin/:positionIdentifier", async (req, res) => {
   try {
-    const vin = req.params.vin;
-    const positionIdentifier = req.params.positionIdentifier;
-
-    if (!/^\w{17}$/g.test(vin)) {
-      return res.status(400).json({
-        success: false,
-        found: false,
-        error: `${vin} is not a valid VIN.`,
-      });
-    }
-
-    // Cache Key
-    const cacheKey = `brand:${vin}:${positionIdentifier}`;
-
-    // Versuche zuerst aus dem Cache zu lesen
-    const cachedImage = await getFromCache(cacheKey);
-    if (cachedImage) {
-      res.set("Content-Type", "image/jpeg");
-      return res.status(200).send(cachedImage);
-    }
-
-    // Hole das Bild
-    const image = await getImageForCar(vin, positionIdentifier);
-
-    if (!image) {
+    const result = await getImageForCar(
+      req.params.vin,
+      req.params.positionIdentifier
+    );
+    if (!result) {
       return res.status(404).send();
     }
 
-    // Füge Brand hinzu wenn nötig
-    let finalImage = image.image;
-    if (positionIdentifier == 1) {
-      finalImage = await brandImage(finalImage);
+    // Hole die angeforderte Breite aus dem Query-Parameter
+    const requestedWidth = req.query.shrink
+      ? parseInt(req.query.shrink, 10)
+      : null;
+
+    // Verarbeite das Bild zuerst (Resize wenn nötig)
+    let processedImage = await postProcessImage(req, result.image);
+
+    // Füge Brand nur bei Position 1 hinzu
+    if (req.params.positionIdentifier == 1) {
+      processedImage = await brandImage(
+        processedImage,
+        "BRAND",
+        requestedWidth
+      );
     }
 
-    // Cache das gebrandete Bild
-    await setCache(cacheKey, finalImage);
-
-    res.set("Content-Type", "image/jpeg");
-    return res.status(200).send(finalImage);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ success: false, found: false, error: err.message });
+    res.type("image/jpeg").send(processedImage);
+  } catch (error) {
+    console.error("[HTTP] Error processing brand request:", error.message);
+    res.status(500).send();
   }
 });
 
@@ -607,12 +632,21 @@ app.get(
         await setCache(originalCacheKey, image);
       }
 
-      // Verarbeite das Bild wenn nötig
+      // Hole die angeforderte Breite aus dem Query-Parameter
+      const requestedWidth = req.query.shrink
+        ? parseInt(req.query.shrink, 10)
+        : null;
+
+      // Verarbeite das Bild zuerst (Resize wenn nötig)
       let processedImage = await postProcessImage(req, image);
 
-      // Füge Brand hinzu wenn nötig
+      // Füge Brand nur bei Position 1 hinzu
       if (positionIdentifier == 1) {
-        processedImage = await brandImage(processedImage, brandId);
+        processedImage = await brandImage(
+          processedImage,
+          brandId,
+          requestedWidth
+        );
       }
 
       // Cache das endgültige Bild
