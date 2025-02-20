@@ -1,6 +1,5 @@
 import express from "express";
 import { createClient } from "@supabase/supabase-js";
-import jimp from "jimp";
 import cors from "cors";
 import { BasicStrategy } from "passport-http";
 import passport from "passport";
@@ -11,10 +10,14 @@ import fs from "fs";
 import path from "path";
 import sharp from "sharp";
 
+/**
+ * Lade Umgebungsvariablen aus .env wenn nicht in Produktion
+ */
 if (process.env.NODE_ENV !== "production") {
   dotenv.config();
 }
 
+// Konfigurationskonstanten
 const port = process.env.SERVER_PORT;
 const AUTHUSER = process.env.AUTHUSER;
 const AUTHPASSWORD = process.env.AUTHPASSWORD;
@@ -24,8 +27,9 @@ const REDIS_PASSWORD = process.env.REDIS_PASSWORD;
 const BUCKET_NAME = process.env.BUCKET_NAME;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
-const CACHE_TTL = 30 * 60;
+const CACHE_TTL = 30 * 60; // 30 Minuten in Sekunden
 
+// Service-Clients initialisieren
 const redis = new Redis({
   host: REDIS_HOST,
   port: REDIS_PORT,
@@ -34,10 +38,13 @@ const redis = new Redis({
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
+// Lokaler Speicherpfad für Fallback-Bilder
 const basePathLocal = path.normalize("own");
 
-let BRAND = null;
-
+/**
+ * Branding-Konfiguration
+ * Verschiedene Branding-Varianten, die beim Start geladen werden
+ */
 let BRANDS = {
   BRAND: null,
   BRANDDSG: null,
@@ -45,6 +52,10 @@ let BRANDS = {
   BRANDBOR: null,
 };
 
+/**
+ * Basic Auth Konfiguration
+ * Wird für geschützte Endpunkte verwendet
+ */
 passport.use(
   new BasicStrategy((user, pw, done) => {
     try {
@@ -57,33 +68,57 @@ passport.use(
   })
 );
 
-// Cache-Funktionen
+/**
+ * Cache-Funktionen
+ */
+
+/**
+ * Liest Daten aus dem Redis-Cache
+ * @param {string} key - Cache-Schlüssel
+ * @returns {Promise<Buffer|null>} Cached data oder null wenn nicht gefunden
+ */
 async function getFromCache(key) {
   try {
     const cachedData = await redis.getBuffer(key);
     if (cachedData) {
-      console.log(`Cache HIT: ${key}`);
+      console.log(`[Cache] Hit: ${key}`);
       return cachedData;
     }
-    console.log(`Cache MISS: ${key}`);
+    console.log(`[Cache] Miss: ${key}`);
     return null;
   } catch (error) {
-    console.error("Redis error:", error);
+    console.error(`[Cache] Error reading key ${key}:`, error.message);
     return null;
   }
 }
 
+/**
+ * Speichert Daten im Redis-Cache
+ * @param {string} key - Cache-Schlüssel
+ * @param {Buffer} data - Zu cachende Daten
+ * @param {number} ttl - Time-to-live in Sekunden
+ * @returns {Promise<boolean>} Erfolg der Operation
+ */
 async function setCache(key, data, ttl = CACHE_TTL) {
   try {
     await redis.set(key, data, "EX", ttl);
+    console.log(`[Cache] Set: ${key} (TTL: ${ttl}s)`);
     return true;
   } catch (error) {
-    console.error("Redis cache error:", error);
+    console.error(`[Cache] Error setting key ${key}:`, error.message);
     return false;
   }
 }
 
-// Supabase Funktionen
+/**
+ * Supabase Funktionen
+ */
+
+/**
+ * Holt Fahrzeugdaten aus der Datenbank
+ * @param {string} vin - Fahrzeug-Identifikationsnummer
+ * @returns {Promise<Object|null>} Fahrzeugdaten oder null
+ */
 async function getCarData(vin) {
   const { data, error } = await supabase
     .from("cars")
@@ -92,57 +127,70 @@ async function getCarData(vin) {
     .single();
 
   if (error) {
-    console.error("Supabase error:", error);
+    console.error(`[DB] Error fetching car data for ${vin}:`, error.message);
     return null;
   }
 
   return data;
 }
 
+/**
+ * Lädt ein Bild aus dem Supabase Storage
+ * @param {string} path - Pfad zum Bild im Storage
+ * @returns {Promise<Buffer|null>} Bilddaten oder null
+ */
 async function getImageFromSupabase(path) {
   const { data, error } = await supabase.storage
     .from(BUCKET_NAME)
     .download(path);
 
   if (error) {
-    console.error("Supabase storage error:", error);
+    console.error(`[Storage] Error downloading ${path}:`, error.message);
     return null;
   }
 
-  // In Buffer umwandeln
   const arrayBuffer = await data.arrayBuffer();
   return Buffer.from(arrayBuffer);
 }
 
+/**
+ * Hauptfunktion zum Laden von Fahrzeugbildern
+ * Versucht nacheinander: Cache -> Supabase -> Lokaler Speicher
+ * @param {string} vin - Fahrzeug-Identifikationsnummer
+ * @param {number} positionIdentifier - Bildposition
+ * @returns {Promise<Object|null>} Bilddaten und Metadaten
+ */
 async function getImageForCar(vin, positionIdentifier) {
-  // Bildpfad in Supabase: "vin/positionIdentifier.jpg"
   const imagePath = `${vin}/${positionIdentifier}.jpg`;
-
-  // Erstelle einen Cache-Key
   const cacheKey = `img:${vin}:${positionIdentifier}`;
 
-  // Versuche zuerst aus dem Cache zu lesen
+  // 1. Cache-Versuch
   const cachedImage = await getFromCache(cacheKey);
   if (cachedImage) {
     return { image: cachedImage };
   }
 
-  // Versuche dann aus Supabase zu lesen
+  // 2. Supabase-Versuch
   const imageBuffer = await getImageFromSupabase(imagePath);
   if (imageBuffer) {
-    // In Cache speichern
     await setCache(cacheKey, imageBuffer);
     return { image: imageBuffer };
   }
 
-  // Fallback: Versuche lokalen Speicher
+  // 3. Lokaler Fallback
   return await findFromLocalStore(vin, positionIdentifier);
 }
 
-// Lokale Speicher Funktionen (als Fallback beibehalten)
+/**
+ * Sucht ein Bild im lokalen Speicher
+ * @param {string} vin - Fahrzeug-Identifikationsnummer
+ * @param {number} positionIdentifier - Bildposition
+ * @returns {Promise<Object|null>} Bilddaten und Metadaten
+ */
 const findFromLocalStore = async (vin, positionIdentifier) => {
   const fullPath = path.join(basePathLocal, vin);
   if (!fs.existsSync(fullPath)) {
+    console.log(`[Local] Directory not found: ${fullPath}`);
     return null;
   }
 
@@ -151,62 +199,74 @@ const findFromLocalStore = async (vin, positionIdentifier) => {
   const matchingFile = files.find((x) => r.test(x));
 
   if (!matchingFile) {
+    console.log(`[Local] No matching file for ${vin}/${positionIdentifier}`);
     return null;
   }
 
   const filePath = path.join(fullPath, matchingFile);
+  console.log(`[Local] Found file: ${filePath}`);
   return {
     image: fs.readFileSync(filePath),
     local: true,
   };
 };
-// Bildverarbeitung
+
+/**
+ * Verarbeitet ein Bild (Resize)
+ * @param {Object} req - Express Request Object
+ * @param {Buffer} imageBuffer - Originalbild
+ * @returns {Promise<Buffer>} Verarbeitetes Bild
+ */
 const postProcessImage = async (req, imageBuffer) => {
   try {
-    let vin = req.params.vin;
-    let positionIdentifier = req.params.positionIdentifier;
     let shrink = req.query.shrink;
 
     if (!shrink) {
       return imageBuffer;
     }
 
-    // Cache-Key für verarbeitetes Bild
-    const cacheKey = `img:${vin}:${positionIdentifier}:${shrink}`;
-
-    // Versuche aus Cache zu laden
-    const cachedImage = await getFromCache(cacheKey);
-    if (cachedImage) {
-      return cachedImage;
+    const width = parseInt(shrink, 10);
+    if (isNaN(width) || width <= 0) {
+      console.error(`[Image] Invalid shrink parameter: ${shrink}`);
+      return imageBuffer;
     }
 
-    // Bild verarbeiten
+    console.log(`[Image] Processing image, target width: ${width}px`);
     const processedImage = await sharp(imageBuffer)
-      .resize(parseInt(shrink))
-      .jpeg()
+      .resize(width, null, {
+        withoutEnlargement: true,
+        fit: "inside",
+      })
+      .jpeg({
+        quality: 80,
+        progressive: true,
+      })
       .toBuffer();
-
-    // In Cache speichern
-    await setCache(cacheKey, processedImage);
 
     return processedImage;
   } catch (err) {
-    console.error("Image processing error:", err);
+    console.error(`[Image] Processing error:`, err.message);
     return imageBuffer;
   }
 };
 
-// let Image, Car;
-
+/**
+ * Sucht alle Bilder für eine VIN im lokalen Speicher
+ * @param {string} vin - Fahrzeug-Identifikationsnummer
+ * @returns {Promise<Object>} Gefundene Bilder und Metadaten
+ */
 const findFromOwnStore = (vin) => {
   return new Promise((resolve, reject) => {
     let found = false;
     let images = [];
     const fullPath = path.join(basePathLocal, vin);
+
     if (!fs.existsSync(fullPath)) {
+      console.log(`[Local] No directory for VIN ${vin}`);
       resolve({ found });
       return;
     }
+
     let files = fs.readdirSync(fullPath);
     let r = new RegExp(`^${vin}_\\d{1,2}.\\w+$`);
     files = files.filter((x) => r.test(x));
@@ -215,7 +275,9 @@ const findFromOwnStore = (vin) => {
       positionIdentifier: parseInt(x.split("_")[1].split(".")[0]),
       fileName: x,
     }));
+
     found = true;
+    console.log(`[Local] Found ${files.length} images for VIN ${vin}`);
     resolve({
       found,
       images: files,
@@ -224,88 +286,65 @@ const findFromOwnStore = (vin) => {
   });
 };
 
-// const getImageBuffer = (p) => {
-//   const fullPath = path.join(basePathLocal, p);
-//   return { image: fs.readFileSync(fullPath) };
-// };
-
+/**
+ * Fügt Branding zu einem Bild hinzu
+ * @param {Buffer} imageBuffer - Originalbild
+ * @param {string} brand - Branding-Variante
+ * @returns {Promise<Buffer>} Bild mit Branding
+ */
 const brandImage = async (imageBuffer, brand = "BRAND") => {
-  if (!BRANDS[brand]) return imageBuffer;
+  if (!BRANDS[brand]) {
+    console.log(`[Brand] No branding asset for ${brand}, skipping`);
+    return imageBuffer;
+  }
 
   try {
     const cacheKey = `brand:${brand}:${imageBuffer
       .toString("base64")
       .slice(0, 20)}`;
 
-    // Versuche aus Cache zu laden
     const cachedImage = await getFromCache(cacheKey);
     if (cachedImage) {
       return cachedImage;
     }
 
-    let imageTmp = await jimp.read(imageBuffer);
-    imageTmp = await imageTmp.composite(
-      BRANDS[brand],
-      0,
-      imageTmp.bitmap.height - BRANDS[brand].bitmap.height
-    );
+    console.log(`[Brand] Applying ${brand} branding`);
+    const processedImage = await sharp(imageBuffer)
+      .composite([
+        {
+          input: BRANDS[brand],
+          gravity: "south",
+        },
+      ])
+      .jpeg()
+      .toBuffer();
 
-    const brandedImage = await imageTmp.getBufferAsync(jimp.MIME_JPEG);
-
-    // In Cache speichern
-    await setCache(cacheKey, brandedImage);
-
-    return brandedImage;
+    await setCache(cacheKey, processedImage);
+    return processedImage;
   } catch (error) {
-    console.error("Branding error:", error);
+    console.error(`[Brand] Error applying ${brand}:`, error.message);
     return imageBuffer;
   }
 };
 
-// const handleCarData = (carData, vin, positionIdentifier, res) => {
-//   return new Promise(async (resolve, reject) => {
-//     let image = null;
-//     if (!carData) {
-//       let hasLocalImage = await findFromOwnStore(vin);
-//       if (!hasLocalImage.found) {
-//         res.status(404).send();
-//         reject();
-//         return;
-//       }
-//       let positionImage = hasLocalImage.images.find(
-//         (x) => x.positionIdentifier == positionIdentifier
-//       );
-//       if (!positionImage) {
-//         res.status(404).send();
-//         reject();
-//         return;
-//       }
-//       image = getImageBuffer(`${positionImage.vin}/${positionImage.fileName}`);
-//     } else {
-//       image = carData.images.find(
-//         (x) => x.positionIdentifier == positionIdentifier
-//       );
-//       if (!image) {
-//         res.status(404).send();
-//         reject();
-//         return;
-//       }
-//       let imageId = image.imageId;
-//       image = await Image.findOne({ _id: imageId });
-//       if (!image) {
-//         res.status(404).send();
-//         reject();
-//         return;
-//       }
-//     }
-//     resolve(image);
-//   });
-// };
-
+// Server-Initialisierung
 const app = express();
-app.use(morgan("[:date] :method :url :status - :response-time ms"));
+
+// Middleware
+app.use(
+  morgan((tokens, req, res) => {
+    return [
+      `[HTTP]`,
+      tokens.method(req, res),
+      tokens.url(req, res),
+      tokens.status(req, res),
+      `${tokens["response-time"](req, res)}ms`,
+    ].join(" ");
+  })
+);
 app.use(cors());
 
+// Basis-Healthcheck
 app.get("/", (req, res) => res.status(200).send());
 
 app.get("/images/v1/status/:vin", async (req, res) => {
@@ -500,29 +539,35 @@ app.get(
         });
       }
 
-      // Cache Key mit Brand ID
-      const cacheKey = `brand:${brandId}:${vin}:${positionIdentifier}`;
+      // Cache Key für finales Bild (inkl. Branding und Shrink)
       const shrinkParam = req.query.shrink;
       const finalCacheKey = shrinkParam
-        ? `${cacheKey}:${shrinkParam}`
-        : cacheKey;
+        ? `brand:${brandId}:${vin}:${positionIdentifier}:${shrinkParam}`
+        : `brand:${brandId}:${vin}:${positionIdentifier}`;
 
-      // Versuche zuerst aus dem Cache zu lesen
+      // Versuche zuerst aus dem Cache zu laden
       const cachedImage = await getFromCache(finalCacheKey);
       if (cachedImage) {
         res.set("Content-Type", "image/jpeg");
         return res.status(200).send(cachedImage);
       }
 
-      // Hole das Bild
-      const image = await getImageForCar(vin, positionIdentifier);
+      // Hole das Originalbild
+      const originalCacheKey = `img:${vin}:${positionIdentifier}`;
+      let image = await getFromCache(originalCacheKey);
 
       if (!image) {
-        return res.status(404).send();
+        const imageResult = await getImageForCar(vin, positionIdentifier);
+        if (!imageResult) {
+          return res.status(404).send();
+        }
+        image = imageResult.image;
+        // Cache das Originalbild
+        await setCache(originalCacheKey, image);
       }
 
       // Verarbeite das Bild wenn nötig
-      let processedImage = await postProcessImage(req, image.image);
+      let processedImage = await postProcessImage(req, image);
 
       // Füge Brand hinzu wenn nötig
       if (positionIdentifier == 1) {
@@ -546,7 +591,9 @@ app.get(
 app.get("/images/v1/status/changedsince/:seconds", async (req, res) => {
   try {
     const sec = req.params.seconds;
-    const timestamp = new Date(Date.now() - sec * 1000).toISOString();
+
+    // Erstelle Timestamp für den Vergleich
+    const compareDate = new Date(Date.now() - sec * 1000);
 
     // Cache key
     const cacheKey = `changedsince:${sec}`;
@@ -557,17 +604,30 @@ app.get("/images/v1/status/changedsince/:seconds", async (req, res) => {
       return res.status(200).json(JSON.parse(cachedData));
     }
 
-    // Supabase Abfrage
-    const { data, error } = await supabase
+    // Supabase Abfrage für beide Zeitstempel
+    const { data: createdData, error: createdError } = await supabase
       .from("cars")
-      .select("vin")
-      .gte("updated_at", timestamp);
+      .select("vin, created_at")
+      .gt("created_at", compareDate.toISOString());
 
-    if (error) throw error;
+    const { data: updatedData, error: updatedError } = await supabase
+      .from("cars")
+      .select("vin, updated_at")
+      .gt("updated_at", compareDate.toISOString());
+
+    if (createdError || updatedError) throw createdError || updatedError;
+
+    // Kombiniere und dedupliziere die VINs
+    const allVins = [
+      ...new Set([
+        ...(createdData || []).map((item) => item.vin),
+        ...(updatedData || []).map((item) => item.vin),
+      ]),
+    ];
 
     const result = {
       success: true,
-      data: data.map((item) => item.vin),
+      data: allVins,
     };
 
     // Cache für 60 Sekunden
@@ -732,29 +792,32 @@ app.delete(
   }
 );
 
-// Starte den Server und lade Brands
+/**
+ * Server Startup
+ * Lädt Branding-Assets und startet den Server
+ */
 app.listen(port, async () => {
   try {
     // Lade Branding-Bilder
-    BRAND = await jimp.read(`./Header_Petrol.png`);
+    console.log("[Init] Loading branding assets...");
+    const brandBuffer = await sharp("./Header_Petrol.png").toBuffer();
     BRANDS = {
-      BRAND: await jimp.read(`./Header_Petrol.png`),
-      BRANDDSG: await jimp.read(`./Header_Petrol.png`),
-      BRANDAPPROVED: await jimp.read(`./Header_Petrol.png`),
-      BRANDBOR: await jimp.read(`./Header_Petrol.png`),
+      BRAND: brandBuffer,
+      BRANDDSG: brandBuffer,
+      BRANDAPPROVED: brandBuffer,
+      BRANDBOR: brandBuffer,
     };
 
-    console.log(`App listening on port ${port}`);
-    console.log(`Connected to Redis @ ${REDIS_HOST}:${REDIS_PORT}`);
-    console.log(`Connected to Supabase @ ${SUPABASE_URL}`);
+    console.log(`[Server] Listening on port ${port}`);
+    console.log(`[Redis] Connected to ${REDIS_HOST}:${REDIS_PORT}`);
+    console.log(`[Supabase] Connected to ${SUPABASE_URL}`);
   } catch (error) {
-    console.error("Error loading branding images:", error);
+    console.error("[Init] Failed to load branding assets:", error.message);
     process.exit(1);
   }
 });
 
-// Fehlerbehandlung für Redis
+// Redis Fehlerbehandlung
 redis.on("error", (err) => {
-  console.error("Redis connection error:", err);
-  // Nicht beenden, da wir Fallbacks haben
+  console.error("[Redis] Connection error:", err.message);
 });
