@@ -17,6 +17,7 @@
     "ioredis": "^5.5.0",
     "mongoose": "^8.10.1",
     "morgan": "^1.10.0",
+    "node-fetch": "^3.3.2",
     "passport": "^0.6.0",
     "passport-http": "^0.3.0",
     "sharp": "^0.33.2"

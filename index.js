@@ -9,6 +9,7 @@ import morgan from "morgan";
 import fs from "fs";
 import path from "path";
 import sharp from "sharp";
+import fetch from "node-fetch";
 
 /**
  * Lade Umgebungsvariablen aus .env wenn nicht in Produktion
@@ -155,7 +156,7 @@ async function getImageFromSupabase(path) {
 
 /**
  * Hauptfunktion zum Laden von Fahrzeugbildern
- * Versucht nacheinander: Cache -> Supabase -> Lokaler Speicher
+ * Versucht nacheinander: Cache -> Supabase -> Fallback -> Lokaler Speicher
  * @param {string} vin - Fahrzeug-Identifikationsnummer
  * @param {number} positionIdentifier - Bildposition
  * @returns {Promise<Object|null>} Bilddaten und Metadaten
@@ -188,7 +189,36 @@ async function getImageForCar(vin, positionIdentifier) {
     }
   }
 
-  // 3. Lokaler Fallback
+  // 3. Fallback-Server-Versuch (nur wenn aktiviert)
+  if (process.env.FALLBACK_ENABLED === "true") {
+    try {
+      console.log(
+        `[Fallback] Trying fallback server for ${vin}/${positionIdentifier}`
+      );
+      const fallbackUrl = `http://${process.env.FALLBACK_SERVER}:${process.env.FALLBACK_PORT}/fallback/${vin}/${positionIdentifier}`;
+
+      const response = await fetch(fallbackUrl);
+      if (response.ok) {
+        console.log(`[Fallback] Found image on fallback server`);
+        const imageBuffer = Buffer.from(await response.arrayBuffer());
+
+        // Cache das Bild
+        await setCache(cacheKey, imageBuffer);
+
+        // Der Fallback-Server kümmert sich selbst um die Migration und Metadaten
+        return { image: imageBuffer };
+      }
+    } catch (error) {
+      console.error(
+        `[Fallback] Error fetching from fallback server:`,
+        error.message
+      );
+    }
+  } else {
+    console.log(`[Fallback] Fallback server is disabled`);
+  }
+
+  // 4. Lokaler Fallback als letzte Option
   return await findFromLocalStore(vin, positionIdentifier);
 }
 

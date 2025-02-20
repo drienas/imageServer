@@ -1,6 +1,82 @@
 # Image Server
 
-Ein hochperformanter Bildserver mit integriertem Caching-System, Bildverarbeitung und verschiedenen Branding-Optionen.
+Ein hochperformanter Bildserver mit integriertem Caching-System, Bildverarbeitung, verschiedenen Branding-Optionen und automatischer Migration von Legacy-Daten.
+
+## Architektur
+
+Das System besteht aus zwei Hauptkomponenten:
+
+1. **Image Server (index.js)**
+
+   - Hauptserver für Bildauslieferung
+   - Caching und Bildverarbeitung
+   - Branding-Funktionalität
+   - Mehrschichtige Bildsuche (Cache -> Supabase -> Fallback -> Lokal)
+
+2. **Fallback/Migration Server (migrate.js)**
+   - Automatische Migration von MongoDB zu Supabase
+   - Fallback-Bildauslieferung
+   - On-Demand Migration bei Bildanfragen
+   - Verarbeitung verlinkter Fahrzeuge
+
+## Konfiguration
+
+### Umgebungsvariablen
+
+```env
+# Server-Konfiguration
+SERVER_PORT=3334                    # Port für den Hauptserver
+FALLBACK_SERVER=localhost          # Hostname des Fallback-Servers
+FALLBACK_PORT=3335                # Port des Fallback-Servers
+FALLBACK_ENABLED=true             # Aktivierung des Fallback-Mechanismus
+
+# Authentifizierung
+AUTHUSER=admin                    # Basic Auth Benutzername
+AUTHPASSWORD=xxx                  # Basic Auth Passwort
+
+# Supabase Konfiguration
+SUPABASE_URL=xxx                  # Supabase URL
+SUPABASE_KEY=xxx                  # Supabase API Key
+BUCKET_NAME=car-images            # Supabase Storage Bucket
+
+# Redis Konfiguration
+REDIS_HOST=xxx                    # Redis Host
+REDIS_PORT=6379                   # Redis Port
+REDIS_PASSWORD=xxx                # Redis Passwort
+
+# MongoDB (nur für Fallback/Migration)
+MONGO_URL=mongodb://localhost:27017/cardata  # MongoDB Connection String
+```
+
+## Containerisierung
+
+Das System ist in zwei separate Docker-Container aufgeteilt:
+
+### Image Server Container
+
+```dockerfile
+# Dockerfile für den Hauptserver
+FROM node:18-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+EXPOSE 3334
+CMD ["node", "index.js"]
+```
+
+### Fallback Server Container
+
+```dockerfile
+# Dockerfile für den Fallback/Migration Server
+FROM node:18-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+EXPOSE 3335
+CMD ["node", "migrate.js", "fallback"]
+```
 
 ## Endpunkte
 
@@ -187,3 +263,60 @@ CREATE TABLE cars (
 - Vorgeladene Buffer für verschiedene Branding-Varianten
 - Werden beim Serverstart geladen
 - Gleiche Basis-Datei mit unterschiedlichen Verwendungszwecken
+
+## Migration und Fallback-Mechanismus
+
+### Automatische Migration
+
+Der Fallback-Server bietet zwei Betriebsmodi:
+
+1. **Vollständige Migration**
+
+   ```bash
+   node migrate.js migrate
+   ```
+
+   - Migriert alle Fahrzeuge und Bilder von MongoDB zu Supabase
+   - Berücksichtigt verlinkte Fahrzeuge
+   - Erstellt korrekte Metadaten
+
+2. **Fallback-Service**
+   ```bash
+   node migrate.js fallback
+   ```
+   - Stellt Bilder aus MongoDB bereit
+   - Führt On-Demand Migration durch
+   - Aktualisiert Metadaten automatisch
+
+### Verlinkte Fahrzeuge
+
+Der Server unterstützt zwei Arten von Fahrzeugen:
+
+1. **Original-Fahrzeuge**
+
+   - Speichern ihre eigenen Bilder
+   - Werden als Quelle für verlinkte Fahrzeuge verwendet
+
+2. **Verlinkte Fahrzeuge**
+   - Verweisen auf Bilder von Original-Fahrzeugen
+   - Speichern keine eigenen Bilder
+   - Werden bei der Migration korrekt verknüpft
+
+### Migrations-Prozess
+
+1. **Bildverarbeitung**
+
+   - JPEG-Optimierung (Qualität: 85)
+   - Progressive JPEG-Format
+   - Automatische Größenanpassung (optional)
+
+2. **Metadaten-Verwaltung**
+
+   - Erstellung/Aktualisierung von Supabase-Einträgen
+   - Korrekte Zeitstempel-Verwaltung
+   - Verknüpfungslogik für linked cars
+
+3. **Cache-Invalidierung**
+   - Automatische Löschung relevanter Cache-Einträge
+   - Berücksichtigung von Status-Caches
+   - Invalidierung von changedsince-Caches
