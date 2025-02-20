@@ -331,7 +331,13 @@ async function startFallbackService() {
   const { Image, Car } = await connectToMongo();
 
   // Hilfsfunktion für Metadaten-Update
-  async function updateCarMetadata(vin, positionIdentifier, imagePath) {
+  async function updateCarMetadata(
+    vin,
+    positionIdentifier,
+    imagePath,
+    car,
+    imageBuffer
+  ) {
     try {
       // Prüfe, ob das Auto bereits existiert
       const { data: existingCar, error: queryError } = await supabase
@@ -344,6 +350,62 @@ async function startFallbackService() {
         throw queryError;
       }
 
+      // Wenn das Auto verlinkt ist, finde das Original-Auto
+      let originalCar = null;
+      if (car.linked) {
+        // Suche das Original-Auto in MongoDB
+        const linkedImageEntry = car.images.find(
+          (img) => img.positionIdentifier === parseInt(positionIdentifier)
+        );
+        if (linkedImageEntry) {
+          // Finde das Original-Auto anhand der Bild-ID
+          originalCar = await Car.findOne({
+            "images.imageId": linkedImageEntry.imageId,
+            linked: { $ne: true },
+          });
+        }
+      }
+
+      // Wenn es ein verlinktes Auto ist und wir das Original gefunden haben
+      if (car.linked && originalCar) {
+        const originalImagePath = `${originalCar.vin}/${positionIdentifier}.jpg`;
+
+        // Prüfe ob das Original-Bild bereits in Supabase existiert
+        const { data: originalExists } = await supabase.storage
+          .from(BUCKET_NAME)
+          .list(originalCar.vin, {
+            search: `${positionIdentifier}.jpg`,
+          });
+
+        if (!originalExists || originalExists.length === 0) {
+          console.log(
+            `Original image for linked car ${vin} not found in Supabase, uploading...`
+          );
+          // Upload des Original-Bildes
+          const { error: uploadError } = await supabase.storage
+            .from(BUCKET_NAME)
+            .upload(originalImagePath, imageBuffer, {
+              contentType: "image/jpeg",
+              upsert: true,
+            });
+
+          if (uploadError) {
+            throw new Error(
+              `Failed to upload original image: ${uploadError.message}`
+            );
+          }
+          console.log(
+            `Successfully uploaded original image to ${originalImagePath}`
+          );
+
+          // Lösche den Status-Cache des Original-Autos
+          await redis.del(`status:${originalCar.vin}`);
+        }
+
+        // Aktualisiere den Pfad auf das Original-Bild
+        imagePath = originalImagePath;
+      }
+
       if (!existingCar) {
         // Erstelle neuen Eintrag
         const { error } = await supabase.from("cars").insert({
@@ -354,13 +416,18 @@ async function startFallbackService() {
               path: imagePath,
             },
           ],
-          linked: false,
+          linked: !!car.linked,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         });
 
         if (error) throw error;
-        console.log(`Created new metadata entry for ${vin}`);
+        console.log(
+          `Created new metadata entry for ${vin} (linked: ${!!car.linked})`
+        );
+
+        // Lösche den Status-Cache für das neue Auto
+        await redis.del(`status:${vin}`);
       } else {
         // Auto existiert bereits, aktualisiere die Bilder
         let images = existingCar.images || [];
@@ -387,12 +454,23 @@ async function startFallbackService() {
           .from("cars")
           .update({
             images: images,
+            linked: !!car.linked,
             updated_at: new Date().toISOString(),
           })
           .eq("vin", vin);
 
         if (error) throw error;
-        console.log(`Updated metadata for ${vin}`);
+        console.log(`Updated metadata for ${vin} (linked: ${!!car.linked})`);
+
+        // Lösche den Status-Cache für das aktualisierte Auto
+        await redis.del(`status:${vin}`);
+      }
+
+      // Lösche auch alle changedsince Caches, da sich Metadaten geändert haben
+      const changedSinceCacheKeys = await redis.keys("changedsince:*");
+      if (changedSinceCacheKeys.length > 0) {
+        await redis.del(changedSinceCacheKeys);
+        console.log("Cleared changedsince caches");
       }
     } catch (error) {
       console.error("Metadata update error:", error);
@@ -445,25 +523,36 @@ async function startFallbackService() {
           .jpeg({ quality: 85, progressive: true })
           .toBuffer();
 
-        const imagePath = `${vin}/${positionIdentifier}.jpg`;
+        let imagePath = `${vin}/${positionIdentifier}.jpg`;
 
-        // Upload zu Supabase Storage
-        const { error: uploadError } = await supabase.storage
-          .from(BUCKET_NAME)
-          .upload(imagePath, optimizedImage, {
-            contentType: "image/jpeg",
-            upsert: true,
-          });
+        // Bei verlinkten Autos nur die Metadaten aktualisieren
+        if (!car.linked) {
+          // Upload zu Supabase Storage nur für nicht-verlinkte Autos
+          const { error: uploadError } = await supabase.storage
+            .from(BUCKET_NAME)
+            .upload(imagePath, optimizedImage, {
+              contentType: "image/jpeg",
+              upsert: true,
+            });
 
-        if (uploadError) {
-          throw uploadError;
+          if (uploadError) {
+            throw uploadError;
+          }
         }
 
-        // Aktualisiere die Metadaten
-        await updateCarMetadata(vin, positionIdentifier, imagePath);
+        // Aktualisiere die Metadaten und stelle sicher, dass Original-Bilder existieren
+        await updateCarMetadata(
+          vin,
+          positionIdentifier,
+          imagePath,
+          car,
+          optimizedImage
+        );
 
         console.log(
-          `Auto-migrated image and metadata for ${vin}/${positionIdentifier} during fallback`
+          `Auto-migrated ${
+            car.linked ? "linked" : ""
+          } image and metadata for ${vin}/${positionIdentifier} during fallback`
         );
       } catch (err) {
         console.error("Auto-migration failed:", err);

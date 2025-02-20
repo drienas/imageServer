@@ -161,7 +161,6 @@ async function getImageFromSupabase(path) {
  * @returns {Promise<Object|null>} Bilddaten und Metadaten
  */
 async function getImageForCar(vin, positionIdentifier) {
-  const imagePath = `${vin}/${positionIdentifier}.jpg`;
   const cacheKey = `img:${vin}:${positionIdentifier}`;
 
   // 1. Cache-Versuch
@@ -171,10 +170,22 @@ async function getImageForCar(vin, positionIdentifier) {
   }
 
   // 2. Supabase-Versuch
-  const imageBuffer = await getImageFromSupabase(imagePath);
-  if (imageBuffer) {
-    await setCache(cacheKey, imageBuffer);
-    return { image: imageBuffer };
+  // Hole zuerst die Metadaten des Autos
+  const carData = await getCarData(vin);
+  if (carData) {
+    // Finde den korrekten Bildpfad aus den Metadaten
+    const imageData = carData.images.find(
+      (img) => img.positionIdentifier === parseInt(positionIdentifier)
+    );
+
+    if (imageData && imageData.path) {
+      // Verwende den Pfad aus den Metadaten
+      const imageBuffer = await getImageFromSupabase(imageData.path);
+      if (imageBuffer) {
+        await setCache(cacheKey, imageBuffer);
+        return { image: imageBuffer };
+      }
+    }
   }
 
   // 3. Lokaler Fallback
