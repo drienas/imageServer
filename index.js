@@ -3,7 +3,6 @@ import mongoose from "mongoose";
 import cors from "cors";
 import { BasicStrategy } from "passport-http";
 import passport from "passport";
-import cache from "memory-cache";
 import * as dotenv from "dotenv";
 import morgan from "morgan";
 import fs from "fs";
@@ -60,21 +59,10 @@ const getCacheKey = (type, ...args) => {
 
 const getFromCache = async (key) => {
   try {
-    // Erst im Memory-Cache suchen
-    const memoryResult = cache.get(key);
-    if (memoryResult) {
-      return { hit: true, data: memoryResult, source: "memory" };
-    }
-
-    // Dann in Redis suchen
     const redisResult = await redis.get(key);
     if (redisResult) {
-      // Wenn in Redis gefunden, auch in Memory-Cache speichern
-      const data = JSON.parse(redisResult);
-      cache.put(key, data, 5 * 60 * 1000); // 5 Minuten Memory-Cache
-      return { hit: true, data, source: "redis" };
+      return { hit: true, data: JSON.parse(redisResult), source: "redis" };
     }
-
     return { hit: false };
   } catch (err) {
     console.error("Cache Error:", err);
@@ -84,10 +72,6 @@ const getFromCache = async (key) => {
 
 const setInCache = async (key, data, ttl) => {
   try {
-    // In Memory-Cache speichern
-    cache.put(key, data, 5 * 60 * 1000); // 5 Minuten
-
-    // In Redis speichern
     await redis.setex(key, ttl, JSON.stringify(data));
   } catch (err) {
     console.error("Cache Set Error:", err);
