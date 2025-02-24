@@ -143,8 +143,8 @@ const brandImage = async (im, brand = "BRAND") => {
       footerImage.metadata(),
     ]);
 
-    // Prüfe ob der Footer breiter ist als das Originalbild
-    if (footerMeta.width > originalMeta.width) {
+    // Prüfe ob der Footer breiter oder schmaler ist als das Originalbild
+    if (footerMeta.width !== originalMeta.width) {
       // Skaliere den Footer auf die Breite des Originalbildes
       footerImage.resize(originalMeta.width, null, {
         fit: "contain",
