@@ -1,6 +1,5 @@
 import express from "express";
 import mongoose from "mongoose";
-import jimp from "jimp";
 import cors from "cors";
 import { BasicStrategy } from "passport-http";
 import passport from "passport";
@@ -132,13 +131,40 @@ const getImageBuffer = (p) => {
 
 const brandImage = async (im, brand = "BRAND") => {
   if (!BRANDS[brand]) return im;
-  let imageTmp = await jimp.read(im);
-  imageTmp = await imageTmp.composite(
-    BRANDS[brand],
-    0,
-    imageTmp.bitmap.height - BRANDS[brand].bitmap.height
-  );
-  return imageTmp.getBufferAsync(jimp.MIME_JPEG);
+
+  try {
+    // Lade das Originalbild und den Footer
+    const originalImage = sharp(im);
+    const footerImage = BRANDS[brand];
+
+    // Hole die Metadaten beider Bilder
+    const [originalMeta, footerMeta] = await Promise.all([
+      originalImage.metadata(),
+      footerImage.metadata(),
+    ]);
+
+    // Prüfe ob der Footer breiter ist als das Originalbild
+    if (footerMeta.width > originalMeta.width) {
+      // Skaliere den Footer auf die Breite des Originalbildes
+      footerImage.resize(originalMeta.width, null, {
+        fit: "contain",
+      });
+    }
+
+    // Composite das Footer-Bild über das Originalbild
+    return originalImage
+      .composite([
+        {
+          input: await footerImage.toBuffer(),
+          gravity: "south",
+        },
+      ])
+      .jpeg()
+      .toBuffer();
+  } catch (err) {
+    console.error("Error in brandImage:", err);
+    return im;
+  }
 };
 
 const handleCarData = (carData, vin, positionIdentifier, res) => {
@@ -447,13 +473,12 @@ mongoose.connect(mongoUrl, {
 mongoose.connection.on("connected", (err) => {
   console.log(`Connected to MongoDB...`);
   app.listen(port, async () => {
-    BRAND = await jimp.read(`./Header_Petrol.png`);
+    BRAND = sharp(`./Header_Petrol.png`);
     BRANDS = {
-      BRAND: await jimp.read(`./Header_Petrol.png`),
-      BRANDDSG: await jimp.read(`./Header_Petrol.png`),
-      BRANDAPPROVED: await jimp.read(`./Header_Petrol.png`),
-      BRANDBOR: await jimp.read(`./Header_Petrol.png`),
-      // BRANDBOR: null,
+      BRAND: sharp(`./Header_Petrol.png`),
+      BRANDDSG: sharp(`./Header_Petrol.png`),
+      BRANDAPPROVED: sharp(`./Header_Petrol.png`),
+      BRANDBOR: sharp(`./Header_Petrol.png`),
     };
     console.log(`App listening on port ${port}`);
     Image = mongoose.model("Image", imageSchema);
