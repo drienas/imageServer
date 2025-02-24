@@ -15,6 +15,7 @@
     "dotenv": "^16.0.0",
     "express": "^4.17.1",
     "image-size": "^1.0.2",
+    "ioredis": "^5.5.0",
     "jimp": "^0.16.0",
     "memory-cache": "^0.2.0",
     "mongoose": "^5.12.3",
