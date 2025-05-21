@@ -9,6 +9,11 @@ import fs from "fs";
 import path from "path";
 import sharp from "sharp";
 import Redis from "ioredis";
+import {
+  S3Client,
+  ListObjectsV2Command,
+  GetObjectCommand,
+} from "@aws-sdk/client-s3";
 
 if (process.env.NODE_ENV !== "production") {
   dotenv.config();
@@ -18,6 +23,21 @@ const mongo = process.env.MONGO_DB;
 const port = process.env.SERVER_PORT;
 const AUTHUSER = process.env.AUTHUSER;
 const AUTHPASSWORD = process.env.AUTHPASSWORD;
+
+// S3/MinIO Client Setup
+const s3Client = new S3Client({
+  endpoint: process.env.MINIO_ENDPOINT,
+  region: process.env.MINIO_REGION || "us-east-1",
+  credentials: {
+    accessKeyId: process.env.MINIO_ACCESS_KEY,
+    secretAccessKey: process.env.MINIO_SECRET_KEY,
+  },
+  forcePathStyle: true,
+});
+
+const MINIO_BUCKET = process.env.MINIO_BUCKET || "images";
+const MINIO_OWN_FOLDER =
+  process.env.MINIO_OWN_FOLDER || "DSG-Root/Fahrzeugbilder";
 
 // Redis Client Setup
 const redis = new Redis({
@@ -166,35 +186,71 @@ const postProcessImage = (req, img) => {
 
 let Image, Car;
 
-const findFromOwnStore = (vin) => {
-  return new Promise((resolve, reject) => {
-    let found = false;
-    let images = [];
-    const fullPath = path.join(basePathLocal, vin);
-    if (!fs.existsSync(fullPath)) {
-      resolve({ found });
-      return;
+const findFromOwnStore = async (vin) => {
+  try {
+    const command = new ListObjectsV2Command({
+      Bucket: MINIO_BUCKET,
+      Prefix: `${MINIO_OWN_FOLDER}/${vin}/`,
+    });
+
+    const response = await s3Client.send(command);
+
+    if (!response.Contents || response.Contents.length === 0) {
+      return { found: false };
     }
-    let files = fs.readdirSync(fullPath);
-    let r = new RegExp(`^${vin}_\\d{1,2}.\\w+$`);
-    files = files.filter((x) => r.test(x));
-    files = files.map((x) => ({
-      vin,
-      positionIdentifier: parseInt(x.split("_")[1].split(".")[0]),
-      fileName: x,
-    }));
-    found = true;
-    resolve({
-      found,
+
+    const files = response.Contents.map((obj) => obj.Key)
+      .filter((key) => {
+        // Matcht z.B. DSG-Root/Fahrzeugbilder/1C4BU0000FPB06732/1C4BU0000FPB06732_1.jpeg
+        const r = new RegExp(
+          `^${MINIO_OWN_FOLDER}/${vin}/${vin}_(\\d{1,2})\\.\\w+$`
+        );
+        return r.test(key);
+      })
+      .map((key) => {
+        const match = key.match(new RegExp(`${vin}_(\\d{1,2})\\.`));
+        return {
+          vin,
+          positionIdentifier: match ? parseInt(match[1]) : null,
+          fileName: key.split("/").pop(),
+        };
+      });
+
+    return {
+      found: files.length > 0,
       images: files,
       local: true,
-    });
-  });
+    };
+  } catch (err) {
+    console.error("Error in findFromOwnStore:", err);
+    return { found: false };
+  }
 };
 
-const getImageBuffer = (p) => {
-  const fullPath = path.join(basePathLocal, p);
-  return { image: fs.readFileSync(fullPath) };
+const getImageBuffer = async (key) => {
+  try {
+    // Prüfen ob der Key bereits den MINIO_OWN_FOLDER enthält
+    const fullKey = key.startsWith(MINIO_OWN_FOLDER)
+      ? key
+      : `${MINIO_OWN_FOLDER}/${key}`;
+
+    const command = new GetObjectCommand({
+      Bucket: MINIO_BUCKET,
+      Key: fullKey,
+    });
+
+    const response = await s3Client.send(command);
+    const chunks = [];
+
+    for await (const chunk of response.Body) {
+      chunks.push(chunk);
+    }
+
+    return { image: Buffer.concat(chunks) };
+  } catch (err) {
+    console.error("Error in getImageBuffer:", err);
+    throw err;
+  }
 };
 
 const brandImage = async (im, brand = "BRAND") => {
@@ -250,74 +306,58 @@ const brandImage = async (im, brand = "BRAND") => {
   }
 };
 
-const handleCarData = (carData, vin, positionIdentifier, res) => {
-  return new Promise(async (resolve, reject) => {
-    try {
-      // Prüfe zuerst den Cache
-      const cacheKey = getCacheKey(
-        "image",
-        vin,
-        positionIdentifier,
-        "original"
-      );
-      const cached = await getFromCache(cacheKey);
+const handleCarData = async (carData, vin, positionIdentifier, res) => {
+  try {
+    // Prüfe zuerst den Cache
+    const cacheKey = getCacheKey("image", vin, positionIdentifier, "original");
+    const cached = await getFromCache(cacheKey);
 
-      if (cached.hit) {
-        console.log(`Cache hit for original image from ${cached.source}`);
-        resolve({ image: Buffer.from(cached.data, "base64") });
+    if (cached.hit) {
+      console.log(`Cache hit for original image from ${cached.source}`);
+      return { image: Buffer.from(cached.data, "base64") };
+    }
+
+    let image = null;
+    if (!carData) {
+      let hasLocalImage = await findFromOwnStore(vin);
+      if (!hasLocalImage.found) {
+        res.status(404).send();
         return;
       }
-
-      let image = null;
-      if (!carData) {
-        let hasLocalImage = await findFromOwnStore(vin);
-        if (!hasLocalImage.found) {
-          res.status(404).send();
-          reject();
-          return;
-        }
-        let positionImage = hasLocalImage.images.find(
-          (x) => x.positionIdentifier == positionIdentifier
-        );
-        if (!positionImage) {
-          res.status(404).send();
-          reject();
-          return;
-        }
-        image = getImageBuffer(
-          `${positionImage.vin}/${positionImage.fileName}`
-        );
-      } else {
-        image = carData.images.find(
-          (x) => x.positionIdentifier == positionIdentifier
-        );
-        if (!image) {
-          res.status(404).send();
-          reject();
-          return;
-        }
-        let imageId = image.imageId;
-        image = await Image.findOne({ _id: imageId });
-        if (!image) {
-          res.status(404).send();
-          reject();
-          return;
-        }
-      }
-
-      // Cache das Originalbild
-      await setInCache(
-        cacheKey,
-        image.image.toString("base64"),
-        CACHE_TTL.IMAGE
+      let positionImage = hasLocalImage.images.find(
+        (x) => x.positionIdentifier == positionIdentifier
       );
-
-      resolve(image);
-    } catch (err) {
-      console.error("Error in handleCarData:", err);
-      reject(err);
+      if (!positionImage) {
+        res.status(404).send();
+        return;
+      }
+      image = await getImageBuffer(
+        `${positionImage.vin}/${positionImage.fileName}`
+      );
+    } else {
+      image = carData.images.find(
+        (x) => x.positionIdentifier == positionIdentifier
+      );
+      if (!image) {
+        res.status(404).send();
+        return;
+      }
+      let imageId = image.imageId;
+      image = await Image.findOne({ _id: imageId });
+      if (!image) {
+        res.status(404).send();
+        return;
+      }
     }
-  });
+
+    // Cache das Originalbild
+    await setInCache(cacheKey, image.image.toString("base64"), CACHE_TTL.IMAGE);
+
+    return image;
+  } catch (err) {
+    console.error("Error in handleCarData:", err);
+    throw err;
+  }
 };
 
 const app = express();
@@ -402,17 +442,19 @@ app.get("/images/v1/raw/:vin/:positionIdentifier", async (req, res) => {
     }
     let carData = await Car.findOne({ vin });
 
-    handleCarData(carData, vin, positionIdentifier, res)
-      .then(async (image) => {
-        res.set("Content-Type", "image/jpeg");
-        let i = image.image;
-        i = await postProcessImage(req, i);
-        res.status(200).send(i);
-      })
-      .catch(() => {});
+    try {
+      const image = await handleCarData(carData, vin, positionIdentifier, res);
+      res.set("Content-Type", "image/jpeg");
+      let i = image.image;
+      i = await postProcessImage(req, i);
+      res.status(200).send(i);
+    } catch (err) {
+      console.error(err);
+      res.status(404).send();
+    }
   } catch (err) {
     console.error(err);
-    res.json(500).json({ success: false, found: false, error: err });
+    res.status(500).json({ success: false, found: false, error: err });
   }
 });
 
@@ -429,17 +471,20 @@ app.get("/images/v1/brand/:vin/:positionIdentifier", async (req, res) => {
       return;
     }
     let carData = await Car.findOne({ vin });
-    handleCarData(carData, vin, positionIdentifier, res)
-      .then(async (image) => {
-        res.set("Content-Type", "image/jpeg");
-        let im = image.image;
-        im = await postProcessImage(req, im);
-        if (positionIdentifier == 1) im = await brandImage(im);
-        res.status(200).send(im);
-      })
-      .catch(() => {});
+
+    try {
+      const image = await handleCarData(carData, vin, positionIdentifier, res);
+      res.set("Content-Type", "image/jpeg");
+      let im = image.image;
+      im = await postProcessImage(req, im);
+      if (positionIdentifier == 1) im = await brandImage(im);
+      res.status(200).send(im);
+    } catch (err) {
+      console.error(err);
+      res.status(404).send();
+    }
   } catch (err) {
-    res.json(500).json({ success: false, found: false, error: err });
+    res.status(500).json({ success: false, found: false, error: err });
   }
 });
 
@@ -632,11 +677,7 @@ app.delete(
 );
 
 console.log(`Connecting to MongoDB @ ${mongoUrl}`);
-mongoose.connect(mongoUrl, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-  useCreateIndex: true,
-});
+mongoose.connect(mongoUrl);
 
 mongoose.connection.on("connected", (err) => {
   console.log(`Connected to MongoDB...`);
